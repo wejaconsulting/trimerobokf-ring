@@ -21,19 +21,30 @@ export const appConfigSchema = z.object({
   fortnoxWritesEnabled: boolFromEnv(false),
   fortnoxAdapter: z.enum(['mock', 'real']).default('mock'),
   fortnoxApiBaseUrl: z.string().default('https://api.fortnox.se'),
+  /** Origins allowed to call the API. Empty means "reflect any origin". */
+  corsOrigins: z.array(z.string()).default([]),
+  /** When a password is set, every route except /health requires basic auth. */
+  demoUser: z.string().default('demo'),
+  demoPassword: z.string().default(''),
 });
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
 
 export function appConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const config = appConfigSchema.parse({
-    apiHost: env.API_HOST,
-    apiPort: env.API_PORT,
+    apiHost: resolveHost(env),
+    apiPort: env.PORT ?? env.API_PORT,
     logLevel: env.LOG_LEVEL,
     shadowMode: env.SHADOW_MODE,
     fortnoxWritesEnabled: env.FORTNOX_WRITES_ENABLED,
     fortnoxAdapter: env.FORTNOX_ADAPTER ?? 'mock',
     fortnoxApiBaseUrl: env.FORTNOX_API_BASE_URL,
+    corsOrigins: (env.WEB_ORIGIN ?? '')
+      .split(',')
+      .map((o) => o.trim())
+      .filter(Boolean),
+    demoUser: env.DEMO_USER,
+    demoPassword: env.DEMO_PASSWORD,
   });
 
   // Phase 1 refuses to start in a configuration that could write to Fortnox.
@@ -50,4 +61,19 @@ export function appConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AppConfi
   }
 
   return config;
+}
+
+/**
+ * Picks the bind address.
+ *
+ * Hosting platforms (Render, Railway, Fly) inject `PORT` and route traffic to
+ * the container, so a process still bound to loopback is simply unreachable -
+ * and the failure looks like a health-check timeout rather than a config
+ * mistake. When `PORT` is present and `API_HOST` is not, bind all interfaces.
+ * Locally, where neither is set, keep loopback: an API with no authentication
+ * should not be exposed to the local network by default.
+ */
+function resolveHost(env: NodeJS.ProcessEnv): string | undefined {
+  if (env.API_HOST) return env.API_HOST;
+  return env.PORT ? '0.0.0.0' : undefined;
 }

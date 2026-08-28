@@ -23,6 +23,7 @@
   "devDependencies": {
     "drizzle-kit": "0.31.10",
     "tsx": "4.23.12",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "@electric-sql/pglite-socket": "0.2.11"
   }
 }

@@ -8,6 +8,15 @@
 const BASE_URL = process.env.API_BASE_URL ?? 'http://127.0.0.1:4000';
 const TENANT_ID = process.env.DEMO_TENANT_ID ?? 'firm-trimeros';
 
+/**
+ * When a deployment gates the API with a password, these server-side calls have
+ * to present it too. The credentials never reach the browser: every fetch in
+ * this file runs in a server component or a server action.
+ */
+const AUTH_HEADER = process.env.DEMO_PASSWORD
+  ? `Basic ${Buffer.from(`${process.env.DEMO_USER ?? 'demo'}:${process.env.DEMO_PASSWORD}`).toString('base64')}`
+  : undefined;
+
 export class ApiError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -22,6 +31,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       'content-type': 'application/json',
       'x-tenant-id': TENANT_ID,
+      ...(AUTH_HEADER ? { authorization: AUTH_HEADER } : {}),
       ...(init?.headers ?? {}),
     },
     // The review app must always reflect the current state of a close run.

@@ -191,6 +191,7 @@ Full detail, trust boundaries and the Temporal decision: [`docs/architecture.md`
 | [`docs/accounting-decision-model.md`](docs/accounting-decision-model.md) | The three levels, the ten signals and their weights, the validations, the anomaly rules, deduplication. |
 | [`docs/shadow-mode.md`](docs/shadow-mode.md) | What is forbidden, how it is enforced, how it is tested, and what lifting it would require. |
 | [`docs/next-phases.md`](docs/next-phases.md) | What to build next, in dependency order. |
+| [`docs/deployment.md`](docs/deployment.md) | Hosting on Render or Railway, the password gate, and what was and was not verified. |
 
 ---
 
