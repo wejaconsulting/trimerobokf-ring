@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: trimeros-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: trimeros
+      POSTGRES_PASSWORD: trimeros
+      POSTGRES_DB: trimeros
+    ports:
+      - '5433:5432'
+    volumes:
+      - trimeros-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U trimeros -d trimeros']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  trimeros-pgdata:

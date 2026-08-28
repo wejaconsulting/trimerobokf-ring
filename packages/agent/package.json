@@ -1,0 +1,17 @@
+{
+  "name": "@trimeros/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@trimeros/domain": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "peerDependencies": {
+    "openai": "^7.0.0"
+  },
+  "peerDependenciesMeta": {
+    "openai": { "optional": true }
+  }
+}
