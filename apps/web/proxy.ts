@@ -8,8 +8,11 @@ import { NextResponse, type NextRequest } from 'next/server';
  *
  * This is a shareable-link gate, not authentication. Phase 2 replaces it with
  * real sessions - see docs/security-and-permissions.md.
+ *
+ * Next 16 renamed the `middleware` file convention to `proxy`; a file still
+ * named middleware.ts is deprecated, so the gate lives here.
  */
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const password = process.env.DEMO_PASSWORD;
   if (!password) return NextResponse.next();
 

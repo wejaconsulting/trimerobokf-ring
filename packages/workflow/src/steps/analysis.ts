@@ -149,7 +149,8 @@ export function makeNotImplementedStep(stepKey: WorkflowStepKey) {
       const finding: FindingDraft = notImplementedFinding(env, {
         key: def.key,
         labelSv: def.labelSv,
-        description: def.description,
+        // The consultant-facing text: this rationale lands in the review queue.
+        description: def.descriptionSv,
       });
       ctx.state.rawFindings.push(finding);
     }
@@ -157,7 +158,7 @@ export function makeNotImplementedStep(stepKey: WorkflowStepKey) {
     return {
       status: 'not_implemented',
       reasonCode: 'phase_1_scope',
-      message: def.description,
+      message: def.descriptionSv,
     };
   };
 }

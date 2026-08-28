@@ -108,6 +108,7 @@ export interface StepRow {
   labelSv: string;
   labelEn: string;
   description: string;
+  descriptionSv: string;
   implemented: boolean;
   blocksCompletion: boolean;
 }
