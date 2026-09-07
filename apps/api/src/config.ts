@@ -21,6 +21,28 @@ export const appConfigSchema = z.object({
   fortnoxWritesEnabled: boolFromEnv(false),
   fortnoxAdapter: z.enum(['mock', 'real']).default('mock'),
   fortnoxApiBaseUrl: z.string().default('https://api.fortnox.se'),
+  /**
+   * OAuth client credentials for the registered Fortnox app.
+   *
+   * These never leave the API process: they are used to sign the token request
+   * and are absent from every response, log line and audit event. The review
+   * app is only ever told whether they are set.
+   */
+  fortnoxClientId: z.string().default(''),
+  fortnoxClientSecret: z.string().default(''),
+  /** Base64 32-byte key that seals stored tokens. No key, no token storage. */
+  fortnoxTokenEncryptionKey: z.string().default(''),
+  fortnoxAuthorizeUrl: z.string().optional(),
+  fortnoxTokenUrl: z.string().optional(),
+  fortnoxRevokeUrl: z.string().optional(),
+  /**
+   * The API's own public base URL. The OAuth redirect URI is derived from it
+   * and must match what is registered on the Fortnox app, character for
+   * character - a mismatch is the single most common setup failure.
+   */
+  apiPublicUrl: z.string().default(''),
+  /** Where the browser is sent after the callback finishes. */
+  webBaseUrl: z.string().default(''),
   /** Origins allowed to call the API. Empty means "reflect any origin". */
   corsOrigins: z.array(z.string()).default([]),
   /** When a password is set, every route except /health requires basic auth. */
@@ -39,6 +61,14 @@ export function appConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AppConfi
     fortnoxWritesEnabled: env.FORTNOX_WRITES_ENABLED,
     fortnoxAdapter: env.FORTNOX_ADAPTER ?? 'mock',
     fortnoxApiBaseUrl: env.FORTNOX_API_BASE_URL,
+    fortnoxClientId: env.FORTNOX_CLIENT_ID,
+    fortnoxClientSecret: env.FORTNOX_CLIENT_SECRET,
+    fortnoxTokenEncryptionKey: env.FORTNOX_TOKEN_ENCRYPTION_KEY,
+    fortnoxAuthorizeUrl: env.FORTNOX_AUTHORIZE_URL,
+    fortnoxTokenUrl: env.FORTNOX_TOKEN_URL,
+    fortnoxRevokeUrl: env.FORTNOX_REVOKE_URL,
+    apiPublicUrl: env.API_PUBLIC_URL,
+    webBaseUrl: env.WEB_BASE_URL,
     corsOrigins: (env.WEB_ORIGIN ?? '')
       .split(',')
       .map((o) => o.trim())

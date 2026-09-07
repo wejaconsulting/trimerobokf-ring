@@ -5,6 +5,7 @@ import { recordReviewDecision } from '@trimeros/workflow';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Runtime } from '../runtime.js';
+import { registerIntegrationRoutes } from './integrations.js';
 
 /**
  * HTTP surface for the review app.
@@ -48,6 +49,8 @@ const csv = (value: string | undefined): string[] | undefined =>
 
 export async function registerRoutes(app: FastifyInstance, runtime: Runtime): Promise<void> {
   const { repos, engine, config, fortnox, model } = runtime;
+
+  await registerIntegrationRoutes(app, runtime, tenantOf);
 
   app.get('/health', async () => ({ status: 'ok' }));
 

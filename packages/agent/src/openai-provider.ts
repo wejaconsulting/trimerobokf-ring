@@ -1,3 +1,4 @@
+import { asHttpFetch, type HttpFetch } from '@trimeros/domain';
 import { withRetry } from './retry.js';
 import {
   ModelOutputValidationError,
@@ -23,7 +24,8 @@ export interface OpenAIProviderOptions {
   readonly apiKey: string;
   readonly model: string;
   readonly baseUrl?: string;
-  readonly fetchImpl?: typeof fetch;
+  /** Typed structurally so this file never depends on ambient fetch typings. */
+  readonly fetchImpl?: HttpFetch;
   /** Per-1M-token prices, used only for the cost estimate in the audit log. */
   readonly pricing?: { readonly inputPerMillion: number; readonly outputPerMillion: number };
 }
@@ -44,7 +46,7 @@ export class OpenAIModelProvider implements ModelProvider {
   readonly model: string;
   readonly #apiKey: string;
   readonly #baseUrl: string;
-  readonly #fetch: typeof fetch;
+  readonly #fetch: HttpFetch;
   readonly #pricing: { inputPerMillion: number; outputPerMillion: number };
 
   constructor(options: OpenAIProviderOptions) {
@@ -54,7 +56,7 @@ export class OpenAIModelProvider implements ModelProvider {
     this.#apiKey = options.apiKey;
     this.model = options.model;
     this.#baseUrl = options.baseUrl ?? 'https://api.openai.com/v1';
-    this.#fetch = options.fetchImpl ?? fetch;
+    this.#fetch = options.fetchImpl ?? asHttpFetch(globalThis.fetch);
     this.#pricing = options.pricing ?? { inputPerMillion: 0, outputPerMillion: 0 };
   }
 

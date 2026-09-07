@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
 import type { Database } from '../client.js';
 import * as s from '../schema/index.js';
 
@@ -29,6 +29,9 @@ export type AuditEventRow = typeof s.auditEvents.$inferSelect;
 export type ClientRow = typeof s.clients.$inferSelect;
 export type PolicyRow = typeof s.clientAccountingPolicies.$inferSelect;
 export type ClientRuleRow = typeof s.clientRules.$inferSelect;
+export type IntegrationConnectionRow = typeof s.integrationConnections.$inferSelect;
+export type IntegrationCredentialRow = typeof s.integrationCredentials.$inferSelect;
+export type OAuthAuthorizationRequestRow = typeof s.oauthAuthorizationRequests.$inferSelect;
 
 export interface FindingFilter {
   readonly closeRunId?: string;
@@ -88,16 +91,19 @@ export function createRepositories(db: Database) {
         );
     },
 
-    async getIntegrationConnection(scope: ClientScope) {
+    async getIntegrationConnection(
+      scope: ClientScope,
+      kind?: string,
+    ): Promise<IntegrationConnectionRow | undefined> {
+      const conditions = [
+        eq(s.integrationConnections.tenantId, scope.tenantId),
+        eq(s.integrationConnections.clientId, scope.clientId),
+      ];
+      if (kind) conditions.push(eq(s.integrationConnections.kind, kind));
       const [row] = await db
         .select()
         .from(s.integrationConnections)
-        .where(
-          and(
-            eq(s.integrationConnections.tenantId, scope.tenantId),
-            eq(s.integrationConnections.clientId, scope.clientId),
-          ),
-        )
+        .where(and(...conditions))
         .limit(1);
       return row;
     },
@@ -516,6 +522,212 @@ export function createRepositories(db: Database) {
         .from(s.auditEvents)
         .where(and(...conditions))
         .orderBy(asc(s.auditEvents.occurredAt));
+    },
+
+    // --- integrations -----------------------------------------------------
+
+    async listIntegrationConnections(
+      scope: TenantScope,
+      kind?: string,
+    ): Promise<IntegrationConnectionRow[]> {
+      const conditions = [eq(s.integrationConnections.tenantId, scope.tenantId)];
+      if (kind) conditions.push(eq(s.integrationConnections.kind, kind));
+      return db
+        .select()
+        .from(s.integrationConnections)
+        .where(and(...conditions))
+        .orderBy(asc(s.integrationConnections.clientId));
+    },
+
+    async upsertIntegrationConnection(
+      input: typeof s.integrationConnections.$inferInsert,
+    ): Promise<IntegrationConnectionRow> {
+      const [row] = await db
+        .insert(s.integrationConnections)
+        .values({ ...input, id: input.id ?? randomUUID() })
+        .onConflictDoUpdate({
+          target: [
+            s.integrationConnections.tenantId,
+            s.integrationConnections.clientId,
+            s.integrationConnections.kind,
+          ],
+          set: {
+            mode: input.mode,
+            scopes: input.scopes,
+            credentialRef: input.credentialRef ?? null,
+            writesEnabled: input.writesEnabled ?? false,
+            healthy: input.healthy ?? true,
+            status: input.status ?? 'disconnected',
+            statusCode: input.statusCode ?? null,
+            statusChangedAt: input.statusChangedAt ?? null,
+            connectedAt: input.connectedAt ?? null,
+            connectedByUserId: input.connectedByUserId ?? null,
+            remoteCompanyName: input.remoteCompanyName ?? null,
+            remoteOrganisationNumber: input.remoteOrganisationNumber ?? null,
+            lastCheckedAt: input.lastCheckedAt ?? null,
+          },
+        })
+        .returning();
+      if (!row) throw new Error('Failed to upsert integration connection');
+      return row;
+    },
+
+    async updateIntegrationConnection(
+      scope: ClientScope,
+      kind: string,
+      patch: Partial<typeof s.integrationConnections.$inferInsert>,
+    ): Promise<void> {
+      await db
+        .update(s.integrationConnections)
+        .set(patch)
+        .where(
+          and(
+            eq(s.integrationConnections.tenantId, scope.tenantId),
+            eq(s.integrationConnections.clientId, scope.clientId),
+            eq(s.integrationConnections.kind, kind),
+          ),
+        );
+    },
+
+    async createAuthorizationRequest(
+      input: Omit<typeof s.oauthAuthorizationRequests.$inferInsert, 'id'> & { id?: string },
+    ): Promise<OAuthAuthorizationRequestRow> {
+      const [row] = await db
+        .insert(s.oauthAuthorizationRequests)
+        .values({ ...input, id: input.id ?? randomUUID() })
+        .returning();
+      if (!row) throw new Error('Failed to create authorization request');
+      return row;
+    },
+
+    /**
+     * Claims a pending authorization request, by state hash alone.
+     *
+     * This is the one repository method that does not take a tenant scope, and
+     * the exception is deliberate: at the callback we have nothing but the
+     * `state` parameter, and resolving it to a tenant is precisely its job. It
+     * is safe because the lookup is on a hash of 256 CSPRNG bits, and the
+     * claim is atomic - the same UPDATE that returns the row is the one that
+     * marks it consumed, so a replayed callback finds nothing.
+     */
+    async consumeAuthorizationRequest(
+      stateHash: string,
+      now: Date = new Date(),
+    ): Promise<OAuthAuthorizationRequestRow | undefined> {
+      const [row] = await db
+        .update(s.oauthAuthorizationRequests)
+        .set({ consumedAt: now })
+        .where(
+          and(
+            eq(s.oauthAuthorizationRequests.stateHash, stateHash),
+            isNull(s.oauthAuthorizationRequests.consumedAt),
+            gt(s.oauthAuthorizationRequests.expiresAt, now),
+          ),
+        )
+        .returning();
+      return row;
+    },
+
+    async deleteExpiredAuthorizationRequests(now: Date = new Date()): Promise<void> {
+      await db
+        .delete(s.oauthAuthorizationRequests)
+        .where(lte(s.oauthAuthorizationRequests.expiresAt, now));
+    },
+
+    async getIntegrationCredential(
+      scope: ClientScope,
+      kind: string,
+    ): Promise<IntegrationCredentialRow | undefined> {
+      const [row] = await db
+        .select()
+        .from(s.integrationCredentials)
+        .where(
+          and(
+            eq(s.integrationCredentials.tenantId, scope.tenantId),
+            eq(s.integrationCredentials.clientId, scope.clientId),
+            eq(s.integrationCredentials.kind, kind),
+          ),
+        )
+        .limit(1);
+      return row;
+    },
+
+    async upsertIntegrationCredential(
+      input: typeof s.integrationCredentials.$inferInsert,
+    ): Promise<IntegrationCredentialRow> {
+      const [row] = await db
+        .insert(s.integrationCredentials)
+        .values({ ...input, id: input.id ?? randomUUID() })
+        .onConflictDoUpdate({
+          target: [
+            s.integrationCredentials.tenantId,
+            s.integrationCredentials.clientId,
+            s.integrationCredentials.kind,
+          ],
+          set: {
+            sealedAccessToken: input.sealedAccessToken ?? null,
+            sealedRefreshToken: input.sealedRefreshToken,
+            accessTokenExpiresAt: input.accessTokenExpiresAt ?? null,
+            refreshTokenExpiresAt: input.refreshTokenExpiresAt ?? null,
+            grantedScopes: input.grantedScopes,
+            refreshTokenFingerprint: input.refreshTokenFingerprint,
+            rotationCount: input.rotationCount ?? 0,
+            rotatedAt: input.rotatedAt ?? null,
+          },
+        })
+        .returning();
+      if (!row) throw new Error('Failed to upsert integration credential');
+      return row;
+    },
+
+    /**
+     * Stores a rotated token, but only if nothing else rotated first.
+     *
+     * Fortnox invalidates the previous refresh token on every refresh, so two
+     * processes that both refresh produce one usable token and one dead one.
+     * The compare-and-set on `rotationCount` means the loser finds out - it
+     * gets `false` and re-reads - instead of overwriting the live credential
+     * with the dead one.
+     */
+    async rotateIntegrationCredential(
+      scope: ClientScope,
+      kind: string,
+      expectedRotationCount: number,
+      patch: {
+        sealedAccessToken: string;
+        sealedRefreshToken: string;
+        accessTokenExpiresAt: Date;
+        refreshTokenExpiresAt: Date;
+        grantedScopes: string[];
+        refreshTokenFingerprint: string;
+        rotatedAt: Date;
+      },
+    ): Promise<boolean> {
+      const rows = await db
+        .update(s.integrationCredentials)
+        .set({ ...patch, rotationCount: expectedRotationCount + 1 })
+        .where(
+          and(
+            eq(s.integrationCredentials.tenantId, scope.tenantId),
+            eq(s.integrationCredentials.clientId, scope.clientId),
+            eq(s.integrationCredentials.kind, kind),
+            eq(s.integrationCredentials.rotationCount, expectedRotationCount),
+          ),
+        )
+        .returning();
+      return rows.length > 0;
+    },
+
+    async deleteIntegrationCredential(scope: ClientScope, kind: string): Promise<void> {
+      await db
+        .delete(s.integrationCredentials)
+        .where(
+          and(
+            eq(s.integrationCredentials.tenantId, scope.tenantId),
+            eq(s.integrationCredentials.clientId, scope.clientId),
+            eq(s.integrationCredentials.kind, kind),
+          ),
+        );
     },
   };
 }

@@ -1,4 +1,4 @@
-import { periodEnd, periodStart } from '@trimeros/domain';
+import { FORTNOX_DATA_SOURCE_KIND, periodEnd, periodStart } from '@trimeros/domain';
 import { DEMO_CLIENT, DEMO_POLICY, DEMO_PERIOD, buildSyntheticDataset, demoPeriods } from '@trimeros/testing';
 import type { Database } from '../client.js';
 import * as s from '../schema/index.js';
@@ -114,7 +114,7 @@ export async function seedDemoData(db: Database): Promise<{ tenantId: string; cl
       id: DEMO_IDS.connection,
       tenantId,
       clientId: DEMO_IDS.client,
-      kind: 'fortnox',
+      kind: FORTNOX_DATA_SOURCE_KIND,
       mode: 'mock',
       // Mirrors the scopes a real integration would request for this workflow.
       scopes: ['bookkeeping', 'costcenter', 'project', 'supplierinvoice', 'invoice', 'archive'],

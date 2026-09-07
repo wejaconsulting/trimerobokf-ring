@@ -192,6 +192,7 @@ Full detail, trust boundaries and the Temporal decision: [`docs/architecture.md`
 | [`docs/shadow-mode.md`](docs/shadow-mode.md) | What is forbidden, how it is enforced, how it is tested, and what lifting it would require. |
 | [`docs/next-phases.md`](docs/next-phases.md) | What to build next, in dependency order. |
 | [`docs/deployment.md`](docs/deployment.md) | Hosting on Render or Railway, the password gate, and what was and was not verified. |
+| [`docs/fortnox-oauth.md`](docs/fortnox-oauth.md) | Connecting a client's Fortnox account over OAuth: setup, the read-only boundary, token handling, and which details are still unverified. |
 
 ---
 

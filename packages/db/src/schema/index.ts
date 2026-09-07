@@ -431,13 +431,96 @@ export const integrationConnections = pgTable(
     kind: text('kind').notNull(),
     mode: text('mode').notNull(),
     scopes: jsonb('scopes').$type<string[]>().notNull(),
+    /**
+     * Points at `integration_credentials`. The secret itself is never a column
+     * on this table, so the row a UI or an API response is built from carries
+     * no credential material at all.
+     */
     credentialRef: text('credential_ref'),
     writesEnabled: boolean('writes_enabled').notNull().default(false),
     healthy: boolean('healthy').notNull().default(true),
+    /** disconnected | connected | needs_reconnect */
+    status: text('status').notNull().default('disconnected'),
+    /** A short machine code (e.g. `invalid_grant`), never free-text detail. */
+    statusCode: text('status_code'),
+    statusChangedAt: timestamp('status_changed_at', { withTimezone: true }),
+    connectedAt: timestamp('connected_at', { withTimezone: true }),
+    connectedByUserId: text('connected_by_user_id'),
+    /** Echoed back from the connection test, so the UI can name the company. */
+    remoteCompanyName: text('remote_company_name'),
+    remoteOrganisationNumber: text('remote_organisation_number'),
     lastCheckedAt: timestamp('last_checked_at', { withTimezone: true }),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex('integration_connections_uq').on(t.tenantId, t.clientId, t.kind)],
+);
+
+/**
+ * Sealed OAuth credentials.
+ *
+ * Separate from `integration_connections` so that reading connection status -
+ * which the UI and the API do constantly - never loads a credential into
+ * memory. Every value here is AES-256-GCM ciphertext bound to its own
+ * tenant/client/kind; see packages/fortnox/src/oauth/crypto.ts.
+ */
+export const integrationCredentials = pgTable(
+  'integration_credentials',
+  {
+    id: id(),
+    tenantId: tenant(),
+    clientId: text('client_id').notNull(),
+    kind: text('kind').notNull(),
+    sealedAccessToken: text('sealed_access_token'),
+    sealedRefreshToken: text('sealed_refresh_token').notNull(),
+    accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }),
+    /**
+     * Fortnox refresh tokens expire 45 days after issue. Recording it lets the
+     * console warn before a connection dies rather than after.
+     */
+    refreshTokenExpiresAt: timestamp('refresh_token_expires_at', { withTimezone: true }),
+    grantedScopes: jsonb('granted_scopes').$type<string[]>().notNull(),
+    /** Keyed HMAC prefix. Distinguishes rotations in the audit trail. */
+    refreshTokenFingerprint: text('refresh_token_fingerprint').notNull(),
+    /**
+     * Incremented on every rotation. The refresh write is conditional on the
+     * value it read, so two concurrent refreshes cannot both persist a token.
+     */
+    rotationCount: integer('rotation_count').notNull().default(0),
+    rotatedAt: timestamp('rotated_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('integration_credentials_uq').on(t.tenantId, t.clientId, t.kind)],
+);
+
+/**
+ * In-flight OAuth authorization requests.
+ *
+ * The `state` value is stored only as a hash, expires with Fortnox's ten-minute
+ * authorization code, and is consumed on first use. That combination is what
+ * makes the callback safe to expose without the console's own password gate:
+ * the parameter it carries is a single-use, server-issued, unguessable secret.
+ */
+export const oauthAuthorizationRequests = pgTable(
+  'oauth_authorization_requests',
+  {
+    id: id(),
+    tenantId: tenant(),
+    clientId: text('client_id').notNull(),
+    provider: text('provider').notNull(),
+    stateHash: text('state_hash').notNull(),
+    redirectUri: text('redirect_uri').notNull(),
+    requestedScopes: jsonb('requested_scopes').$type<string[]>().notNull(),
+    initiatedByUserId: text('initiated_by_user_id').notNull(),
+    /** Where to send the browser once the exchange finishes. */
+    returnTo: text('return_to'),
+    createdAt: createdAt(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('oauth_authorization_requests_state_uq').on(t.stateHash),
+    index('oauth_authorization_requests_expiry_idx').on(t.expiresAt),
+  ],
 );
 
 /**

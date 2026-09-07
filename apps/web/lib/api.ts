@@ -62,7 +62,58 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ periodKey }),
     }),
+
+  fortnoxStatus: (clientId: string) =>
+    request<FortnoxIntegrationStatus>(
+      `/api/integrations/fortnox/status?clientId=${encodeURIComponent(clientId)}`,
+    ),
+  fortnoxConnect: (body: { clientId: string; userId: string; returnTo?: string }) =>
+    request<{ authorizeUrl: string; expiresAt: string }>('/api/integrations/fortnox/connect', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  fortnoxVerify: (clientId: string, userId: string) =>
+    request<{ connection: FortnoxConnection }>('/api/integrations/fortnox/verify', {
+      method: 'POST',
+      body: JSON.stringify({ clientId, userId }),
+    }),
+  fortnoxDisconnect: (clientId: string, userId: string) =>
+    request<{ revokedAtFortnox: boolean; connection: FortnoxConnection }>(
+      '/api/integrations/fortnox/disconnect',
+      { method: 'POST', body: JSON.stringify({ clientId, userId }) },
+    ),
 };
+
+/**
+ * The connection as the console is allowed to see it.
+ *
+ * Note what is absent: there is no token field, because the endpoint has none
+ * to give. The console cannot leak a credential it is never sent.
+ */
+export interface FortnoxConnection {
+  status: 'disconnected' | 'connected' | 'needs_reconnect';
+  clientId: string;
+  companyName: string | null;
+  organisationNumber: string | null;
+  grantedScopes: string[];
+  connectedAt: string | null;
+  connectedByUserId: string | null;
+  refreshTokenExpiresAt: string | null;
+  lastCheckedAt: string | null;
+  healthy: boolean;
+  statusCode: string | null;
+  writesEnabled: boolean;
+}
+
+export interface FortnoxIntegrationStatus {
+  configured: boolean;
+  /** Environment variables still missing, when `configured` is false. */
+  missing?: string[];
+  redirectUri?: string;
+  requestedScopes: string[];
+  shadowMode: boolean;
+  connection: FortnoxConnection | null;
+}
 
 // --- shapes the UI relies on ---------------------------------------------
 

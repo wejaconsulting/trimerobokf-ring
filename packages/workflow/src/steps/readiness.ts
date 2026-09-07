@@ -1,4 +1,4 @@
-import { periodKeyOf, previousPeriods } from '@trimeros/domain';
+import { FORTNOX_DATA_SOURCE_KIND, periodKeyOf, previousPeriods } from '@trimeros/domain';
 import type { LedgerSnapshot, Voucher } from '@trimeros/domain';
 import type { StepContext } from '../run-context.js';
 import type { StepOutcome } from '../types.js';
@@ -19,10 +19,13 @@ export async function stepAgentReadiness(ctx: StepContext): Promise<StepOutcome>
   const capabilities = await ctx.fortnox.capabilities();
   ctx.state.capabilities = capabilities;
 
-  const connection = await ctx.repos.getIntegrationConnection({
-    tenantId: ctx.tenantId,
-    clientId: ctx.clientId,
-  });
+  // Named explicitly: a client may also hold a `fortnox_oauth` connection for a
+  // live grant, and that row says nothing about where this run reads its data.
+  // Omitting the kind would make the answer depend on row order.
+  const connection = await ctx.repos.getIntegrationConnection(
+    { tenantId: ctx.tenantId, clientId: ctx.clientId },
+    FORTNOX_DATA_SOURCE_KIND,
+  );
   if (!connection) {
     return { status: 'blocked', reasonCode: 'no_integration_connection', message: 'Ingen Fortnox-anslutning är konfigurerad för klienten.' };
   }
