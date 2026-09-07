@@ -1,26 +1,50 @@
 import Link from 'next/link';
-import { api, formatSek, type FindingListItem } from '../../../../lib/api';
-import { Card, DecisionBadge, Score, SeverityBadge, StatusBadge } from '../../../ui';
+import { api, type FindingListItem } from '../../../../lib/api';
+import { QueueTable } from '../../../components/queue-table';
+import { Crumbs, Empty, Panel } from '../../../ui';
 
 export const dynamic = 'force-dynamic';
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
-/** Named filters, so the common triage moves are one click rather than a form. */
+/**
+ * Named filters for the moves a consultant actually makes, each carrying its
+ * own count so the queue can be triaged before a single filter is clicked.
+ */
 const QUICK_FILTERS = [
-  { key: 'all', label: 'Alla', query: {} },
-  { key: 'clear', label: 'Klart', query: { status: 'approved,resolved' } },
-  { key: 'review', label: 'Review', query: { decisionLevel: 'review' } },
-  { key: 'manual', label: 'Manuell bedömning', query: { decisionLevel: 'manual_assessment' } },
+  { key: 'all', label: 'Alla', match: () => true },
+  {
+    key: 'blocking',
+    label: 'Blockerande',
+    match: (f: FindingListItem) => f.blocking,
+  },
+  {
+    key: 'manual',
+    label: 'Manuell bedömning',
+    match: (f: FindingListItem) => f.decisionLevel === 'manual_assessment',
+  },
+  {
+    key: 'review',
+    label: 'Review',
+    match: (f: FindingListItem) => f.decisionLevel === 'review',
+  },
   {
     key: 'missing_docs',
     label: 'Saknar underlag',
-    query: {
-      type: 'anomaly.missing_documentation,validation.input_vat_without_documentation',
-    },
+    match: (f: FindingListItem) =>
+      f.type === 'anomaly.missing_documentation' ||
+      f.type === 'validation.input_vat_without_documentation',
   },
-  { key: 'anomaly', label: 'Avvikelse', query: { severity: 'medium,high,critical' } },
-  { key: 'blocking', label: 'Blockerande', query: { blocking: 'true' } },
+  {
+    key: 'proposal',
+    label: 'Har förslag',
+    match: (f: FindingListItem) => f.hasProposal,
+  },
+  {
+    key: 'decided',
+    label: 'Avgjorda',
+    match: (f: FindingListItem) => f.status !== 'open' && f.status !== 'in_review',
+  },
 ] as const;
 
 function first(value: string | string[] | undefined): string | undefined {
@@ -36,51 +60,61 @@ export default async function QueuePage({
 }) {
   const { closeRunId } = await params;
   const sp = await searchParams;
-
   const active = first(sp.filter) ?? 'all';
+
+  // The whole run is fetched once so every filter chip can show a live count;
+  // the narrowing itself is cheap and happens here.
+  const [detail, all] = await Promise.all([api.closeRun(closeRunId), api.findings(closeRunId)]);
+
+  const account = first(sp.account);
+  const supplier = first(sp.supplierNumber)?.toUpperCase();
+  const minAmount = first(sp.minAmount);
+  const maxAmount = first(sp.maxAmount);
+  const minScore = first(sp.minDecisionScore);
+
   const preset = QUICK_FILTERS.find((f) => f.key === active) ?? QUICK_FILTERS[0];
 
-  const query = new URLSearchParams({ ...preset.query });
-  for (const key of [
-    'account',
-    'supplierNumber',
-    'minAmount',
-    'maxAmount',
-    'minDecisionScore',
-    'maxDecisionScore',
-  ] as const) {
-    const value = first(sp[key]);
-    // Amounts are entered in kronor but the API speaks öre.
-    if (!value) continue;
-    if (key === 'minAmount' || key === 'maxAmount') {
-      query.set(key, String(Math.round(Number(value) * 100)));
-    } else {
-      query.set(key, value);
-    }
-  }
+  const findings = all.filter((f) => {
+    if (!preset.match(f)) return false;
+    if (account && String(f.subject.accountNumber ?? '') !== account) return false;
+    if (supplier && (f.subject.supplierNumber ?? '').toUpperCase() !== supplier) return false;
+    // Amounts are entered in kronor; findings carry integer öre.
+    if (minAmount && Math.abs(f.amount) < Number(minAmount) * 100) return false;
+    if (maxAmount && Math.abs(f.amount) > Number(maxAmount) * 100) return false;
+    if (minScore && f.decisionScore < Number(minScore)) return false;
+    return true;
+  });
 
-  const [detail, findings] = await Promise.all([
-    api.closeRun(closeRunId),
-    api.findings(closeRunId, query.toString()),
-  ]);
+  const hasFieldFilter = Boolean(account || supplier || minAmount || maxAmount || minScore);
 
   return (
     <>
-      <div className="breadcrumb">
-        <Link href="/">Kundöversikt</Link> / <Link href={`/runs/${closeRunId}`}>{detail.run.periodKey}</Link> /
-        Review-kö
-      </div>
+      <Crumbs
+        items={[
+          { label: 'Kundöversikt', href: '/' },
+          { label: detail.run.periodKey, href: `/runs/${closeRunId}` },
+          { label: 'Review-kö' },
+        ]}
+      />
 
-      <div className="page-head">
+      <div className="page-head" style={{ marginTop: 10 }}>
         <div>
           <h1>Review-kö</h1>
           <div className="sub">
-            {detail.client?.name} · {detail.run.periodKey} · {findings.length} post(er)
+            {detail.client?.name} · {detail.run.periodKey} · {findings.length} av {all.length} poster
           </div>
+        </div>
+        <div className="spacer" />
+        <div className="faint row" style={{ gap: 6 }}>
+          <span className="kbd">j</span>
+          <span className="kbd">k</span>
+          flytta
+          <span className="kbd">Enter</span>
+          öppna
         </div>
       </div>
 
-      <Card title="Filter">
+      <Panel title="Filter">
         <div className="chips" style={{ marginBottom: 14 }}>
           {QUICK_FILTERS.map((filter) => (
             <Link
@@ -90,15 +124,16 @@ export default async function QueuePage({
               href={`/runs/${closeRunId}/queue?filter=${filter.key}`}
             >
               {filter.label}
+              <span className="n">{all.filter(filter.match).length}</span>
             </Link>
           ))}
         </div>
 
-        <form className="filters" method="get">
+        <form className="fields" method="get">
           <input type="hidden" name="filter" value={active} />
           <div className="field">
             <label htmlFor="account">Konto</label>
-            <input id="account" type="number" name="account" defaultValue={first(sp.account) ?? ''} />
+            <input id="account" type="number" name="account" defaultValue={account ?? ''} placeholder="5410" />
           </div>
           <div className="field">
             <label htmlFor="supplierNumber">Leverantör</label>
@@ -106,20 +141,20 @@ export default async function QueuePage({
               id="supplierNumber"
               type="text"
               name="supplierNumber"
+              defaultValue={supplier ?? ''}
               placeholder="L001"
-              defaultValue={first(sp.supplierNumber) ?? ''}
             />
           </div>
           <div className="field">
             <label htmlFor="minAmount">Belopp från (kr)</label>
-            <input id="minAmount" type="number" name="minAmount" defaultValue={first(sp.minAmount) ?? ''} />
+            <input id="minAmount" type="number" name="minAmount" defaultValue={minAmount ?? ''} />
           </div>
           <div className="field">
             <label htmlFor="maxAmount">Belopp till (kr)</label>
-            <input id="maxAmount" type="number" name="maxAmount" defaultValue={first(sp.maxAmount) ?? ''} />
+            <input id="maxAmount" type="number" name="maxAmount" defaultValue={maxAmount ?? ''} />
           </div>
           <div className="field">
-            <label htmlFor="minDecisionScore">Score från</label>
+            <label htmlFor="minDecisionScore">Score minst</label>
             <input
               id="minDecisionScore"
               type="number"
@@ -127,104 +162,30 @@ export default async function QueuePage({
               min="0"
               max="1"
               name="minDecisionScore"
-              defaultValue={first(sp.minDecisionScore) ?? ''}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="maxDecisionScore">Score till</label>
-            <input
-              id="maxDecisionScore"
-              type="number"
-              step="0.05"
-              min="0"
-              max="1"
-              name="maxDecisionScore"
-              defaultValue={first(sp.maxDecisionScore) ?? ''}
+              defaultValue={minScore ?? ''}
             />
           </div>
           <button className="btn" type="submit">
             Tillämpa
           </button>
-          <Link className="btn" href={`/runs/${closeRunId}/queue?filter=${active}`}>
-            Rensa
-          </Link>
+          {hasFieldFilter ? (
+            <Link className="btn" href={`/runs/${closeRunId}/queue?filter=${active}`}>
+              Rensa
+            </Link>
+          ) : null}
         </form>
-      </Card>
+      </Panel>
 
-      <Card padded={false}>
+      <Panel padded={false}>
         {findings.length === 0 ? (
-          <div className="empty">Inga poster matchar filtret.</div>
+          <Empty title="Inga poster matchar filtret">
+            Prova ett bredare filter, eller{' '}
+            <Link href={`/runs/${closeRunId}/queue`}>visa alla {all.length} poster</Link>.
+          </Empty>
         ) : (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Avvikelse</th>
-                  <th>Typ</th>
-                  <th>Konto / Leverantör</th>
-                  <th className="num">Belopp</th>
-                  <th>Allvarlighet</th>
-                  <th>Beslutsnivå</th>
-                  <th>Score</th>
-                  <th>Status</th>
-                  <th>Förslag</th>
-                </tr>
-              </thead>
-              <tbody>
-                {findings.map((finding) => (
-                  <FindingRow key={finding.id} finding={finding} />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <QueueTable findings={findings} />
         )}
-      </Card>
+      </Panel>
     </>
-  );
-}
-
-function FindingRow({ finding }: { finding: FindingListItem }) {
-  return (
-    <tr>
-      <td>
-        <Link href={`/findings/${finding.id}`}>{finding.description}</Link>
-        {finding.blocking ? (
-          <span className="badge badge-danger" style={{ marginLeft: 8 }}>
-            Blockerande
-          </span>
-        ) : null}
-      </td>
-      <td className="mono">{finding.type}</td>
-      <td>
-        {finding.subject.accountNumber ? <span className="mono">{finding.subject.accountNumber}</span> : null}
-        {finding.subject.accountNumber && finding.subject.supplierNumber ? ' · ' : null}
-        {finding.subject.supplierNumber ? (
-          <span className="mono">{finding.subject.supplierNumber}</span>
-        ) : null}
-        {!finding.subject.accountNumber && !finding.subject.supplierNumber ? (
-          <span className="faint">—</span>
-        ) : null}
-      </td>
-      <td className="num">{formatSek(finding.amount)}</td>
-      <td>
-        <SeverityBadge severity={finding.severity} />
-      </td>
-      <td>
-        <DecisionBadge level={finding.decisionLevel} />
-      </td>
-      <td>
-        <Score value={finding.decisionScore} />
-      </td>
-      <td>
-        <StatusBadge status={finding.status} />
-      </td>
-      <td>
-        {finding.hasProposal && finding.proposalDecisionLevel ? (
-          <DecisionBadge level={finding.proposalDecisionLevel} />
-        ) : (
-          <span className="faint">—</span>
-        )}
-      </td>
-    </tr>
   );
 }

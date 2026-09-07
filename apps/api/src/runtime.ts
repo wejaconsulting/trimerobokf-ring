@@ -1,5 +1,12 @@
 import { createModelProvider, modelConfigFromEnv, type ModelProvider } from '@trimeros/agent';
-import { createRepositories, dbConfigFromEnv, openDatabase, type DbHandle, type Repositories } from '@trimeros/db';
+import {
+  createRepositories,
+  dbConfigFromEnv,
+  openDatabase,
+  seedDemoData,
+  type DbHandle,
+  type Repositories,
+} from '@trimeros/db';
 import { MockFortnoxAdapter, createFortnoxAdapter, type FortnoxReadPort } from '@trimeros/fortnox';
 import { buildSyntheticDataset } from '@trimeros/testing';
 import { DatabaseWorkflowEngine, type WorkflowEngine } from '@trimeros/workflow';
@@ -26,6 +33,13 @@ export async function createRuntime(env: NodeJS.ProcessEnv = process.env): Promi
   const config = appConfigFromEnv(env);
   const db = await openDatabase(dbConfigFromEnv(env));
   await db.migrate();
+
+  // Hosted demos have nowhere to run `pnpm db:seed` by hand - Render's free
+  // plan has no pre-deploy hook - so the demo tenant is seeded on boot instead.
+  // `seedDemoData` is idempotent, so a restart or a second instance is a no-op.
+  if (env.SEED_ON_BOOT === 'true') {
+    await seedDemoData(db.db);
+  }
 
   const repos = createRepositories(db.db);
 

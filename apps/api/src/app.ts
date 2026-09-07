@@ -1,6 +1,7 @@
 import cors from '@fastify/cors';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
+import { registerDemoAuth } from './auth.js';
 import { registerRoutes } from './routes/index.js';
 import type { Runtime } from './runtime.js';
 
@@ -9,8 +10,17 @@ export async function buildApp(runtime: Runtime): Promise<FastifyInstance> {
     logger: { level: runtime.config.logLevel },
   });
 
-  // The review app is served from a different origin in development.
-  await app.register(cors, { origin: true });
+  // Locally the review app runs on another port, so any origin is reflected.
+  // A deployment sets WEB_ORIGIN and the allowlist replaces that.
+  await app.register(cors, {
+    origin: runtime.config.corsOrigins.length > 0 ? [...runtime.config.corsOrigins] : true,
+  });
+
+  const authEnabled = registerDemoAuth(app, {
+    user: runtime.config.demoUser,
+    password: runtime.config.demoPassword,
+  });
+  if (authEnabled) app.log.info('Password gate enabled for all routes except /health.');
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ZodError) {

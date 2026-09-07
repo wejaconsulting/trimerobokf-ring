@@ -142,6 +142,7 @@ export async function registerRoutes(app: FastifyInstance, runtime: Runtime): Pr
           labelSv: def.labelSv,
           labelEn: def.labelEn,
           description: def.description,
+          descriptionSv: def.descriptionSv,
           implemented: def.implemented,
           blocksCompletion: def.blocksCompletion,
         };

@@ -27,7 +27,8 @@
     "smoke": "tsx scripts/smoke.ts",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm smoke",
     "demo:close-run": "pnpm --filter @trimeros/api close-run",
-    "start:api": "pnpm --filter @trimeros/api start"
+    "start:api": "pnpm --filter @trimeros/api start",
+    "db:deploy": "pnpm --filter @trimeros/db migrate && pnpm --filter @trimeros/db seed"
   },
   "devDependencies": {
     "@types/node": "26.4.0",

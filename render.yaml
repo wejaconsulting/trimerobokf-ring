@@ -1,0 +1,70 @@
+# Render blueprint: two services and a database, defined in one file.
+#
+# In Render: New -> Blueprint -> point at this repository. Render creates
+# everything below. Set DEMO_PASSWORD when prompted (it is marked sync: false,
+# so it is never stored in this file).
+#
+# Free-plan caveats, stated up front: web services sleep after inactivity and
+# take ~30 s to wake, and a free Postgres instance expires after 30 days.
+
+databases:
+  - name: trimeros-db
+    databaseName: trimeros
+    user: trimeros
+    plan: free
+
+services:
+  - type: web
+    name: trimeros-api
+    runtime: docker
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: trimeros-db
+          property: connectionString
+      - key: DB_DRIVER
+        value: postgres
+      # No pre-deploy hook on the free plan, so the demo tenant is seeded on
+      # boot. seedDemoData is idempotent.
+      - key: SEED_ON_BOOT
+        value: 'true'
+      - key: SHADOW_MODE
+        value: 'true'
+      - key: FORTNOX_WRITES_ENABLED
+        value: 'false'
+      - key: FORTNOX_ADAPTER
+        value: mock
+      - key: MODEL_PROVIDER
+        value: fake
+      - key: LOG_LEVEL
+        value: info
+      - key: DEMO_USER
+        value: demo
+      - key: DEMO_PASSWORD
+        sync: false
+      - key: WEB_ORIGIN
+        fromService:
+          name: trimeros-web
+          type: web
+          property: host
+
+  - type: web
+    name: trimeros-web
+    runtime: docker
+    dockerfilePath: ./apps/web/Dockerfile
+    dockerContext: .
+    plan: free
+    envVars:
+      - key: API_BASE_URL
+        fromService:
+          name: trimeros-api
+          type: web
+          property: hostport
+      - key: DEMO_USER
+        value: demo
+      - key: DEMO_PASSWORD
+        sync: false

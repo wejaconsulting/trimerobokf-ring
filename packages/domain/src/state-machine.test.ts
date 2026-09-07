@@ -101,6 +101,16 @@ describe('workflow step definitions', () => {
     expect(WORKFLOW_STEPS.map((s) => s.order)).toEqual([...Array(14)].map((_u, i) => i + 1));
   });
 
+  it('gives every step a Swedish label and description for the consultant', () => {
+    for (const step of WORKFLOW_STEPS) {
+      expect(step.labelSv.length).toBeGreaterThan(3);
+      expect(step.descriptionSv.length).toBeGreaterThan(20);
+      // The review console is Swedish throughout; the English description is
+      // developer-facing and must not be what a consultant reads.
+      expect(step.descriptionSv).not.toBe(step.description);
+    }
+  });
+
   it('only depends on steps that come earlier', () => {
     const orderByKey = new Map(WORKFLOW_STEPS.map((s) => [s.key, s.order]));
     for (const step of WORKFLOW_STEPS) {
