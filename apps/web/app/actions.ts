@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
 import { api, type DecisionBody } from '../lib/api';
 
 /**
@@ -48,4 +49,47 @@ export async function startCloseRun(formData: FormData): Promise<void> {
   if (!clientId || !periodKey) return;
   await api.startCloseRun(clientId, periodKey);
   revalidatePath('/');
+}
+
+const FORTNOX_SETTINGS_PATH = '/installningar/fortnox';
+
+/**
+ * Starts the Fortnox connection.
+ *
+ * The authorize URL is built by the API, which holds the client id; this action
+ * only forwards the browser to it. The client secret never leaves the API
+ * process, and nothing here ever sees a token.
+ */
+export async function connectFortnox(formData: FormData): Promise<void> {
+  const clientId = String(formData.get('clientId') ?? '');
+  const userId = String(formData.get('userId') ?? 'user-anna-consultant');
+  if (!clientId) return;
+
+  const { authorizeUrl } = await api.fortnoxConnect({
+    clientId,
+    userId,
+    returnTo: `${FORTNOX_SETTINGS_PATH}?clientId=${encodeURIComponent(clientId)}`,
+  });
+
+  // `redirect` throws to unwind the action, so it must be outside the try/catch
+  // of any caller that would swallow it.
+  redirect(authorizeUrl);
+}
+
+/** Re-runs the live check against Fortnox. */
+export async function verifyFortnox(formData: FormData): Promise<void> {
+  const clientId = String(formData.get('clientId') ?? '');
+  const userId = String(formData.get('userId') ?? 'user-anna-consultant');
+  if (!clientId) return;
+  await api.fortnoxVerify(clientId, userId);
+  revalidatePath(FORTNOX_SETTINGS_PATH);
+}
+
+/** Revokes the grant at Fortnox and deletes the stored credential. */
+export async function disconnectFortnox(formData: FormData): Promise<void> {
+  const clientId = String(formData.get('clientId') ?? '');
+  const userId = String(formData.get('userId') ?? 'user-anna-consultant');
+  if (!clientId) return;
+  await api.fortnoxDisconnect(clientId, userId);
+  revalidatePath(FORTNOX_SETTINGS_PATH);
 }

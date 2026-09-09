@@ -1,3 +1,4 @@
+import { asHttpFetch } from '@trimeros/domain';
 import { describe, expect, it, vi } from 'vitest';
 import { createModelProvider, modelConfigFromEnv } from './factory.js';
 import { FakeModelProvider } from './fake-provider.js';
@@ -136,7 +137,7 @@ describe('openai provider', () => {
       ),
     );
 
-    const provider = new OpenAIModelProvider({ ...options, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const provider = new OpenAIModelProvider({ ...options, fetchImpl: asHttpFetch(fetchImpl) });
     const result = await provider.generateStructured(request);
 
     expect(result.data.headline).toBe('h');
@@ -148,13 +149,13 @@ describe('openai provider', () => {
     const fetchImpl = vi.fn(
       async () => new Response(JSON.stringify({ output_text: '{"headline":123}' }), { status: 200 }),
     );
-    const provider = new OpenAIModelProvider({ ...options, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const provider = new OpenAIModelProvider({ ...options, fetchImpl: asHttpFetch(fetchImpl) });
     await expect(provider.generateStructured(request)).rejects.toBeInstanceOf(ModelOutputValidationError);
   });
 
   it('does not retry a 400', async () => {
     const fetchImpl = vi.fn(async () => new Response('bad request', { status: 400 }));
-    const provider = new OpenAIModelProvider({ ...options, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const provider = new OpenAIModelProvider({ ...options, fetchImpl: asHttpFetch(fetchImpl) });
     await expect(
       provider.generateStructured({ ...request, maxRetries: 2, timeoutMs: 500 }),
     ).rejects.toThrow(/400/);
@@ -177,11 +178,12 @@ describe('openai provider', () => {
           { status: 200 },
         ),
     );
-    const provider = new OpenAIModelProvider({ ...options, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const provider = new OpenAIModelProvider({ ...options, fetchImpl: asHttpFetch(fetchImpl) });
     await provider.generateStructured(request);
 
-    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit;
-    expect(String(init.body)).not.toContain(options.apiKey);
+    const init = fetchImpl.mock.calls[0]?.[1] as { body?: string } | undefined;
+    expect(init).toBeDefined();
+    expect(String(init?.body)).not.toContain(options.apiKey);
   });
 });
 

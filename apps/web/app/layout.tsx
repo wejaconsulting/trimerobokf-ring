@@ -98,6 +98,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           },
         ]
       : []),
+    { href: '/installningar/fortnox', label: 'Fortnox-anslutning' },
   ];
 
   return (

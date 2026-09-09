@@ -7,6 +7,7 @@ import {
   type DbHandle,
   type Repositories,
 } from '@trimeros/db';
+import { FORTNOX_CONNECTION_KIND } from '@trimeros/domain';
 import { MockFortnoxAdapter } from '@trimeros/fortnox';
 import { DEMO_PERIOD, buildSyntheticDataset } from '@trimeros/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -213,5 +214,61 @@ describe('close run (integration)', () => {
     expect(other).toHaveLength(0);
     expect(await repos.listClients({ tenantId: 'firm-someone-else' })).toHaveLength(0);
     expect(await repos.getCloseRun({ tenantId: 'firm-someone-else' }, closeRunId)).toBeUndefined();
+  });
+});
+
+/**
+ * A live OAuth grant must not change what a close run reads.
+ *
+ * Both records live in `integration_connections` for the same client, so a
+ * lookup that forgets to name its kind gets whichever row the database returns
+ * first. This pins the behaviour: connecting a real Fortnox account leaves the
+ * run's data source exactly where it was.
+ */
+describe('a client that has also connected Fortnox over OAuth', () => {
+  let handle: DbHandle;
+  let repos: Repositories;
+  let engine: DatabaseWorkflowEngine;
+
+  beforeAll(async () => {
+    handle = await openEphemeralDatabase();
+    await handle.migrate();
+    await seedDemoData(handle.db);
+    repos = createRepositories(handle.db);
+
+    // The row a completed OAuth connection leaves behind.
+    await repos.upsertIntegrationConnection({
+      tenantId: DEMO_IDS.tenant,
+      clientId: DEMO_IDS.client,
+      kind: FORTNOX_CONNECTION_KIND,
+      mode: 'real_read_only',
+      scopes: ['bookkeeping'],
+      credentialRef: `fortnox:${DEMO_IDS.tenant}:${DEMO_IDS.client}`,
+      status: 'connected',
+      healthy: true,
+      writesEnabled: false,
+    });
+
+    engine = new DatabaseWorkflowEngine({
+      repos,
+      fortnox: new MockFortnoxAdapter({ ...buildSyntheticDataset() }),
+      model: createModelProvider({ provider: 'fake', model: 'fake', timeoutMs: 5000, maxRetries: 0 }),
+      shadowMode: true,
+    });
+  }, 120_000);
+
+  afterAll(async () => {
+    await handle?.close();
+  });
+
+  it('still passes readiness against the mock data source', async () => {
+    const started = await engine.startCloseRun({
+      tenantId: DEMO_IDS.tenant,
+      clientId: DEMO_IDS.client,
+      periodKey: DEMO_PERIOD,
+    });
+    const result = await engine.executeCloseRun(DEMO_IDS.tenant, started.closeRunId);
+    const readiness = result.steps.find((step) => step.stepKey === 'agent_readiness');
+    expect(readiness?.status).toBe('completed');
   });
 });

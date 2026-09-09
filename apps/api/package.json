@@ -7,7 +7,8 @@
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "close-run": "tsx src/cli/close-run.ts",
-    "inspect": "tsx src/cli/inspect.ts"
+    "inspect": "tsx src/cli/inspect.ts",
+    "fortnox:keygen": "tsx src/cli/fortnox-keygen.ts"
   },
   "dependencies": {
     "@fastify/cors": "11.3.0",
@@ -22,6 +23,7 @@
     "@trimeros/testing": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "26.4.0",
     "tsx": "4.23.12",
     "vitest": "4.1.11"
   }

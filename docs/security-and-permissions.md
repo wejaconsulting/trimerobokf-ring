@@ -54,11 +54,19 @@ yet enforced** — phase 1 has no authentication to enforce it against. The inte
 | Secret | Where it lives | Where it must never appear |
 | --- | --- | --- |
 | Fortnox OAuth client secret | Environment / secret manager | Database, logs, audit events, prompts |
-| Fortnox access & refresh token | Injected `AccessTokenProvider`, in memory only | Anywhere persisted |
+| Fortnox access & refresh token | `integration_credentials`, sealed with AES-256-GCM | Logs, audit events, prompts, API responses — and never in plaintext at rest |
 | OpenAI API key | Environment, read once at provider construction | Request body, logs, audit events |
 
-`IntegrationConnection` stores a `credentialRef` — a pointer into a secret store — and never a
-credential value. The column is nullable and is `null` for the mock adapter.
+`IntegrationConnection` stores a `credentialRef` — a pointer — and never a credential value. The
+column is nullable and is `null` for the mock adapter.
+
+Once a client connects over OAuth the tokens are persisted, because a refresh token has to
+outlive the process that received it. They are sealed with AES-256-GCM under
+`FORTNOX_TOKEN_ENCRYPTION_KEY` before they reach the database, bound to their own
+tenant/client/kind as additional authenticated data, and kept in `integration_credentials`
+rather than on the connection row so that reading connection status never loads a credential.
+There is no plaintext fallback: with no valid key the API refuses to start. Audit events carry a
+keyed 12-character fingerprint, never the token. See [`fortnox-oauth.md`](./fortnox-oauth.md).
 
 A unit test asserts the OpenAI provider never places the key anywhere but the `Authorization`
 header.

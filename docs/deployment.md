@@ -21,6 +21,54 @@ deployed from a browser with no local tooling.
 
 ---
 
+## Vercel — the console only
+
+Vercel suits `apps/web` and cannot run `apps/api`. Worth stating plainly, because
+pointing a Vercel project at `apps/api` produces a build failure whose message
+("Property 'ok' does not exist on type 'Response'") says nothing about the real
+problem:
+
+- the API's only entrypoint is `start: tsx src/server.ts` — a process that
+  listens. There is no `build` script and no output directory to serve;
+- the default database driver is PGlite, which writes to local disk. Vercel's
+  filesystem does not persist between invocations;
+- the Fortnox OAuth work stores sealed refresh tokens, which needs a durable
+  Postgres.
+
+So: **console on Vercel, API on Render or Railway.**
+
+### Settings
+
+| Setting | Value |
+| --- | --- |
+| Root Directory | `apps/web` |
+| Framework preset | Next.js (auto-detected) |
+| Build / install command | leave as detected — Vercel reads the workspace lockfile at the repo root |
+
+### Environment variables
+
+| Variable | Value |
+| --- | --- |
+| `API_BASE_URL` | the deployed API's public base URL, e.g. `https://trimeros-api.onrender.com` |
+| `DEMO_USER` / `DEMO_PASSWORD` | only if the API runs the password gate — the console presents them server-side, and they never reach the browser |
+| `DEMO_TENANT_ID` | only to override the demo tenant |
+
+`API_BASE_URL` is read server-side on every request; there is no build-time
+baking, so changing it needs a redeploy but no rebuild of the code.
+
+With `API_BASE_URL` unset or unreachable the console still renders — the
+overview and the shell both catch the failure and say the API could not be
+reached, rather than showing a stack trace. That is a degraded state, not a
+crash, and it is what a first deploy looks like before the API exists.
+
+### Do not deploy the API here
+
+If a Vercel project already points at `apps/api`, change its Root Directory to
+`apps/web` or delete the project. Left alone it marks every pull request red
+regardless of the code, which trains everyone to ignore a red mark.
+
+---
+
 ## Render (free)
 
 1. Push the repository to GitHub.
@@ -109,6 +157,7 @@ Honest about what was and was not tested:
 | The `postgres` driver — migrations, seed, queries, exact `numeric` money, `jsonb` arrays, idempotency | `packages/db/test/postgres-driver.itest.ts`, which serves PGlite over the real Postgres wire protocol and connects with `postgres-js`, exactly as a deployment does |
 | Host and port resolution, the CORS allowlist, the password gate | `apps/api/test/deploy-config.itest.ts` |
 | The production web build | `pnpm build` in CI |
+| The console's production build, from `apps/web` as its own root | `pnpm build`, which runs `next build` in `apps/web` exactly as Vercel would |
 | **Not checked: the Docker images build and run** | No Docker daemon was available in the environment where this was written. The Dockerfiles follow the standard pnpm-workspace pattern but have never been executed. Expect to iterate on the first deploy. |
 
 ---
