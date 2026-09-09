@@ -2,6 +2,7 @@ import { WORKFLOW_STEPS, getStepDefinition, periodKeyOf } from '@trimeros/domain
 import { FORTNOX_ENDPOINTS, UNVERIFIED_CAPABILITIES } from '@trimeros/fortnox';
 import { RULES } from '@trimeros/rules';
 import { recordReviewDecision } from '@trimeros/workflow';
+import { registerFirmRoutes } from './firm.js';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Runtime } from '../runtime.js';
@@ -48,9 +49,10 @@ const csv = (value: string | undefined): string[] | undefined =>
   value ? value.split(',').map((v) => v.trim()).filter(Boolean) : undefined;
 
 export async function registerRoutes(app: FastifyInstance, runtime: Runtime): Promise<void> {
-  const { repos, engine, config, fortnox, model } = runtime;
+  const { repos, engine, config, fortnox, fortnoxResolver, model } = runtime;
 
   await registerIntegrationRoutes(app, runtime, tenantOf);
+  await registerFirmRoutes(app, runtime, tenantOf);
 
   app.get('/health', async () => ({ status: 'ok' }));
 
@@ -60,7 +62,9 @@ export async function registerRoutes(app: FastifyInstance, runtime: Runtime): Pr
     return {
       shadowMode: config.shadowMode,
       fortnoxWritesEnabled: config.fortnoxWritesEnabled,
-      fortnoxAdapter: fortnox.adapterName,
+      /** mock | auto | real - the configured data-source policy. */
+      fortnoxAdapter: config.fortnoxAdapter,
+      fortnoxIntegrationConfigured: runtime.fortnoxIntegration.configured,
       modelProvider: model.name,
       modelName: model.model,
       capabilities,
@@ -128,16 +132,18 @@ export async function registerRoutes(app: FastifyInstance, runtime: Runtime): Pr
     const run = await repos.getCloseRun({ tenantId }, closeRunId);
     if (!run) return reply.code(404).send({ error: 'close_run_not_found' });
 
-    const [summary, steps, client] = await Promise.all([
+    const [summary, steps, client, proposalCounts] = await Promise.all([
       engine.getSummary(tenantId, closeRunId),
       repos.listSteps({ tenantId }, closeRunId),
       repos.getClient({ tenantId, clientId: run.clientId }),
+      repos.countProposalsByStatus({ tenantId }, closeRunId),
     ]);
 
     return {
       run,
       client,
       summary,
+      proposalCounts,
       steps: steps.map((s) => {
         const def = getStepDefinition(s.stepKey as never);
         return {
@@ -254,7 +260,39 @@ export async function registerRoutes(app: FastifyInstance, runtime: Runtime): Pr
       editedPayload: body.editedPayload ?? null,
     });
 
-    return reply.code(200).send(result);
+    // With live booking switched on, an approval is booked right away - through
+    // the same gate as everything else. In shadow mode this block never runs.
+    let submission = null;
+    if (config.fortnoxWritesEnabled && !config.shadowMode && (body.kind === 'approve' || body.kind === 'edit_proposal')) {
+      const proposals = await repos.listProposalsForFinding({ tenantId }, findingId);
+      if (proposals.length > 0) {
+        submission = await engine.submitApprovedProposals(
+          tenantId,
+          finding.closeRunId,
+          proposals.map((p) => p.id),
+        );
+      }
+    }
+
+    return reply.code(200).send({ ...result, submission });
+  });
+
+  /** Books the run's approved proposals through the write gate, on demand. */
+  app.post('/api/close-runs/:closeRunId/submit', async (request, reply) => {
+    const tenantId = tenantOf(request.headers as Record<string, unknown>);
+    const { closeRunId } = z.object({ closeRunId: z.string() }).parse(request.params);
+    const body = z.object({ proposalIds: z.array(z.string()).optional() }).parse(request.body ?? {});
+    const run = await repos.getCloseRun({ tenantId }, closeRunId);
+    if (!run) return reply.code(404).send({ error: 'close_run_not_found' });
+    const result = await engine.submitApprovedProposals(tenantId, closeRunId, body.proposalIds);
+    return {
+      ...result,
+      liveBooking: config.fortnoxWritesEnabled && !config.shadowMode,
+      note:
+        config.shadowMode || !config.fortnoxWritesEnabled
+          ? 'Shadow mode eller avstängd skrivflagga: inget skickades till Fortnox. Varje förslag rapporteras som stoppat med orsaker.'
+          : 'Varje förslag prövades mot skrivgrinden individuellt.',
+    };
   });
 
   /** Historical comparison for a supplier, used by the finding-detail view. */
@@ -265,11 +303,13 @@ export async function registerRoutes(app: FastifyInstance, runtime: Runtime): Pr
       .parse(request.params);
     const policy = await repos.getPolicy({ tenantId, clientId });
     const months = policy?.historyWindowMonths ?? 12;
+    const source = await fortnoxResolver.resolve({ tenantId, clientId });
+    if (source.kind === 'none') return [];
 
     const vouchers = await Promise.all(
       Array.from({ length: months }, async (_unused, index) => {
         const period = shiftPeriod(new Date().toISOString().slice(0, 7), -index);
-        return fortnox.listVouchers(period);
+        return source.port.listVouchers(period);
       }),
     );
 

@@ -82,7 +82,90 @@ export const api = {
       '/api/integrations/fortnox/disconnect',
       { method: 'POST', body: JSON.stringify({ clientId, userId }) },
     ),
+  fortnoxWrites: (clientId: string, userId: string, enabled: boolean) =>
+    request<{ writesEnabled: boolean; connection: FortnoxConnection | null }>(
+      '/api/integrations/fortnox/writes',
+      { method: 'POST', body: JSON.stringify({ clientId, userId, enabled }) },
+    ),
+
+  // --- firm operations ----------------------------------------------------
+  firmOverview: () => request<FirmOverview>('/api/firm/overview'),
+  createClient: (body: { name: string; organisationNumber: string; userId: string }) =>
+    request<{ client: { id: string; name: string; organisationNumber: string } }>('/api/clients', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  policy: (clientId: string) => request<{ policy: ClientPolicy; rules: ClientRule[] }>(`/api/clients/${clientId}/policy`),
+  updatePolicy: (clientId: string, patch: Partial<ClientPolicy> & { userId: string }) =>
+    request<{ policy: ClientPolicy }>(`/api/clients/${clientId}/policy`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  runAll: (periodKey: string) =>
+    request<RunAllResult>('/api/close-runs/run-all', { method: 'POST', body: JSON.stringify({ periodKey }) }),
+  submitProposals: (closeRunId: string, proposalIds?: string[]) =>
+    request<SubmissionResult>(`/api/close-runs/${closeRunId}/submit`, {
+      method: 'POST',
+      body: JSON.stringify(proposalIds ? { proposalIds } : {}),
+    }),
 };
+
+export interface ClientPolicy {
+  id: string;
+  clientId: string;
+  materialityThreshold: number;
+  automationAmountLimit: number;
+  costCenterRequiredAccounts: number[];
+  projectRequiredAccounts: number[];
+  requireDocumentationForInputVat: boolean;
+  historyWindowMonths: number;
+  amountDeviationThreshold: number;
+  vatRates: number[];
+  autoBookEnabled: boolean;
+  updatedAt: string;
+}
+
+export interface ClientRule {
+  id: string;
+  kind: string;
+  version: string;
+  active: boolean;
+  config: Record<string, unknown>;
+}
+
+export interface FirmOverview {
+  clientCount: number;
+  runsCounted: number;
+  dataSources: Record<string, number>;
+  items: { clear: number; automatic: number; review: number; manual: number; total: number };
+  automationRate: number;
+  blockingFindings: number;
+  proposals: { approved: number; submitted: number };
+  shadowMode: boolean;
+  liveBooking: boolean;
+}
+
+export interface RunAllResult {
+  periodKey: string;
+  results: {
+    clientId: string;
+    clientName: string;
+    closeRunId: string | null;
+    status: string;
+    findingCount: number;
+    blockingFindingCount: number;
+    clearItemCount: number;
+    error: string | null;
+  }[];
+}
+
+export interface SubmissionResult {
+  submitted: { proposalId: string; fortnoxVoucherId: string; reference: string }[];
+  blocked: { proposalId: string; reasons: string[] }[];
+  failed: { proposalId: string; error: string }[];
+  liveBooking: boolean;
+  note: string;
+}
 
 /**
  * The connection as the console is allowed to see it.
@@ -120,7 +203,9 @@ export interface FortnoxIntegrationStatus {
 export interface SystemStatus {
   shadowMode: boolean;
   fortnoxWritesEnabled: boolean;
+  /** mock | auto | real */
   fortnoxAdapter: string;
+  fortnoxIntegrationConfigured: boolean;
   modelProvider: string;
   modelName: string;
   capabilities: {
@@ -146,7 +231,14 @@ export interface RunSummary {
 
 export interface ClientOverview {
   client: { id: string; name: string; organisationNumber: string };
-  latestRun: { id: string; periodKey: string; status: string; shadowMode: boolean } | null;
+  latestRun: {
+    id: string;
+    periodKey: string;
+    status: string;
+    shadowMode: boolean;
+    dataSource: 'mock' | 'real' | 'none';
+    dataSourceLabel: string | null;
+  } | null;
   summary: RunSummary | null;
 }
 
@@ -171,6 +263,8 @@ export interface CloseRunDetail {
     periodKey: string;
     status: string;
     shadowMode: boolean;
+    dataSource: 'mock' | 'real' | 'none';
+    dataSourceLabel: string | null;
     ruleSetVersion: string;
     decisionModelVersion: string;
     correlationId: string;
@@ -178,6 +272,8 @@ export interface CloseRunDetail {
   client: { id: string; name: string } | null;
   summary: RunSummary;
   steps: StepRow[];
+  /** Proposal counts by status: simulated, approved_shadow, submitted, ... */
+  proposalCounts: Record<string, number>;
 }
 
 export interface FindingListItem {
@@ -209,6 +305,10 @@ export interface ProposalDetail {
   simulatedFortnoxEndpoint: string;
   simulatedFortnoxPayload: unknown;
   simulatedPayloadHash: string;
+  fortnoxVoucherId: string | null;
+  fortnoxReference: string | null;
+  submittedAt: string | null;
+  submissionError: string | null;
   rows: {
     id: string;
     account: number;
@@ -241,7 +341,9 @@ export interface FindingDetail {
     id: string;
     kind: string;
     decidedByUserId: string;
+    actorKind: string;
     comment: string | null;
+    approvedPayloadHash: string | null;
     shadowOnly: boolean;
     createdAt: string;
   }[];
@@ -273,6 +375,8 @@ export interface DecisionResult {
   reviewItemStatus: string;
   shadowOnly: boolean;
   note: string;
+  /** Present when live booking is on and the decision was an approval. */
+  submission: Omit<SubmissionResult, 'liveBooking' | 'note'> | null;
 }
 
 /** Formats an integer öre amount as Swedish kronor. */

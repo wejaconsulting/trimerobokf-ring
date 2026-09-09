@@ -37,11 +37,56 @@ codebase is disabled: see [`shadow-mode.md`](./shadow-mode.md).
 ### What "no endpoint" means in the code
 
 `packages/fortnox/src/endpoints.ts` contains **only** the paths corroborated by official
-text. Capabilities without a verified endpoint are listed in `UNVERIFIED_CAPABILITIES` in
+text or by the published Fortnox OpenAPI specification (see "Response shapes" below).
+Capabilities without a corroborated endpoint are listed in `UNVERIFIED_CAPABILITIES` in
 that same file, are reported as unavailable by both adapters, and cause the corresponding
 workflow steps to report `not_implemented` — which blocks period completion. **No endpoint
 in this repository was invented, and no browser automation was implemented as a substitute
 for a missing API.**
+
+### Response shapes (the read path)
+
+The real adapter (`packages/fortnox/src/real-adapter.ts`) parses every response through the
+schemas in `packages/fortnox/src/wire.ts`. The field names there were taken from client
+libraries generated from Fortnox's published OpenAPI specification (`@rantalainen/fortnox-api-client`
+1.1.1 and `@moatless/fortnox-client` 0.1.3, downloaded from the npm registry on 2026-09-09; the
+official hosts themselves remained blocked). Two independent generated sources agreed on every
+field the adapter uses. That is stronger evidence than the search-index method above, and
+weaker than a live call: **"partial (OpenAPI-derived)"** in the table below.
+
+| Resource | Path | List key | Fields used | Notes |
+| --- | --- | --- | --- | --- |
+| Company | `GET /3/companyinformation` | `CompanyInformation` | `CompanyName`, `OrganizationNumber` | connection test |
+| Financial years | `GET /3/financialyears` | `FinancialYears` | `Id`, `FromDate`, `ToDate`, `AccountingMethod`, `accountCharts` | `Id` is the `financialyear` query value everywhere else |
+| Accounts | `GET /3/accounts?financialyear=` | `Accounts` | `Number`, `Description`, `Active`, `VATCode`, `CostCenterSettings`, `ProjectSettings` | `MANDATORY` → dimension required |
+| Voucher series | `GET /3/voucherseries` | `VoucherSeriesCollection` | `Code`, `Description`, `Manual`, `Year` | |
+| Vouchers (list) | `GET /3/vouchers?financialyear=&fromdate=&todate=&page=&limit=` | `Vouchers` | `VoucherSeries`, `VoucherNumber`, `Year`, `TransactionDate`, `Description`, `ReferenceType`, `ReferenceNumber` | **no rows in the list view** |
+| Voucher (detail) | `GET /3/vouchers/{series}/{number}?financialyear=` | `Voucher` | + `VoucherRows[]`: `Account`, `Debit`, `Credit`, `TransactionInformation`, `Description`, `CostCenter`, `Project`, `Removed` | one call per voucher; removed rows dropped |
+| Voucher (create) | `POST /3/vouchers?financialyear=` | `Voucher` | as detail | the only write transport; gated |
+| Voucher file connections | `GET /3/voucherfileconnections` | `VoucherFileConnections` | `FileId`, `VoucherSeries`, `VoucherNumber`, `VoucherYear` | drives `hasFileConnection` |
+| Suppliers | `GET /3/suppliers` | `Suppliers` | `SupplierNumber`, `Name`, `OrganisationNumber`, `Active` | |
+| Customers | `GET /3/customers` | `Customers` | `CustomerNumber`, `Name`, `OrganisationNumber`, `Active` | |
+| Supplier invoices | `GET /3/supplierinvoices` | `SupplierInvoices` | `GivenNumber`, `SupplierNumber`, `SupplierName`, `InvoiceDate`, `DueDate`, `Total` (string), `Booked`, `Cancelled`, `Vouchers[]` | no date filter in the API; filtered client-side |
+| Supplier invoice file connections | `GET /3/supplierinvoicefileconnections` | `SupplierInvoiceFileConnections` | `FileId`, `SupplierInvoiceNumber` | |
+| Customer invoices | `GET /3/invoices?fromdate=&todate=` | `Invoices` | `DocumentNumber`, `CustomerNumber`, `CustomerName`, `InvoiceDate`, `DueDate`, `Total`, `Balance`, `Booked`, `Cancelled`, `VoucherNumber/Series/Year` | |
+| Payments | `GET /3/supplierinvoicepayments`, `GET /3/invoicepayments` | `SupplierInvoicePayments`, `InvoicePayments` | `Number`, `InvoiceNumber`, `PaymentDate`, `Amount`, `Booked` | |
+| Cost centers | `GET /3/costcenters` | `CostCenters` | `Code`, `Description`, `Active` | |
+| Projects | `GET /3/projects` | `Projects` | `ProjectNumber`, `Description`, `Status` | |
+| Locked period | `GET /3/settings/lockedperiod` | `LockedPeriod` | `EndDate` | 404 treated as "not locked" |
+
+Cross-cutting, from the same sources: paging is `page` + `limit` (max 500) with
+`MetaInformation["@TotalPages"]`; errors arrive as `{ ErrorInformation: { Error, Message, Code } }`;
+money is decimal kronor, as numbers on most resources and as strings on supplier invoices. The
+adapter converts to integer öre on the way in and never does arithmetic in kronor.
+
+Known fidelity limits of the read path, by design rather than by omission:
+
+- Voucher rows carry **no VAT code** in Fortnox; the account's `VATCode` is the only signal, so
+  the rule that compares a row's VAT code to history cannot fire on live data.
+- A voucher's supplier is resolved through its `SUPPLIERINVOICE` reference. For a voucher with
+  no sub-ledger link, the adapter falls back to the one supplier whose registered name appears
+  verbatim in the voucher text - deterministic, and never a choice between candidates.
+- The supplier-invoice list view carries no VAT amount; the rules do not use it.
 
 ### Cross-cutting facts (verified)
 
@@ -69,8 +114,8 @@ Legend — **R**ead / **C**reate / **U**pdate / **E**xecute (bookkeep):
 | 1 | Financial years | 1 Agent readiness | Yes | Y | ? | ? | – | `bookkeeping` | Bokföring | `GET /3/financialyears?date={date}` | fortnox.se best-practice guide for vouchers states this exact call and that an empty list means the year must be created | Creating a financial year not verified | Block the run and require the consultant to create the year in Fortnox | **verified** |
 | 2 | Accounts and VAT settings | 1, 7 | Yes | Y | ? | ? | – | `bookkeeping` | Bokföring | `GET /3/accounts/{accountNumber}?financialyear={id}` | Same guide: verify the account exists and is active before creating a voucher | VAT code semantics per account not verified field-by-field | Treat the imported `VatCode` as opaque upstream data; anomaly rules compare it to history rather than to an assumed table | **verified** |
 | 3 | Voucher series | 1 | Yes | Y | ? | ? | – | `bookkeeping` | Bokföring | `GET /3/voucherseries/{Code}` (with financial-year date parameter) | Official voucher best-practice guide; `voucher-series` resource page exists | Manual vs. automatic series semantics not verified | Use only series the account already has; never create one | **verified** |
-| 4 | Vouchers | 6, 7, 10 (read); future booking (write) | Yes | Y | ? | ? | ? | `bookkeeping` | Bokföring | `GET/POST /3/vouchers` | Official guide states vouchers are at `https://api.fortnox.se/3/vouchers/` and require the Bookkeeping scope | **Whether a voucher can be updated or deleted was not verified.** Field names in the create payload (`Voucher.VoucherRows[].Account/Debit/Credit`) follow Fortnox conventions but were **not** confirmed field-by-field | Writes disabled. The proposal payload is built and shown but never sent; a human must verify the contract before any write is enabled | **partial** |
-| 5 | Locked periods | 1, 7, 14 | Yes (read) | Y | ? | ? | – | `bookkeeping` | Bokföring | `locked-period` resource | `developer.fortnox.se/documentation/resources/locked-period/` exists; official text documents "document date is within a locked bookkeeping period" as an error condition | **Setting** a lock via the API was not verified | Read the lock and refuse to propose anything inside it. Locking is out of scope for shadow mode regardless | **partial** |
+| 4 | Vouchers | 6, 7, 10 (read); booking (write) | Yes | Y | Y | ? | – | `bookkeeping` | Bokföring | `GET/POST /3/vouchers`, `GET /3/vouchers/{series}/{number}` | Official guide states vouchers are at `https://api.fortnox.se/3/vouchers/` and require the Bookkeeping scope; create payload and list/detail shapes corroborated by two OpenAPI-derived clients (see "Response shapes") | **Whether a voucher can be updated or deleted was not verified**, and the system never tries. The create payload is confirmed against the OpenAPI shape, not against a live call | Read implemented. Create implemented behind the seven-condition gate; shadow mode keeps it closed | **partial (OpenAPI-derived)** |
+| 5 | Locked periods | 1, 7, 14 | Yes (read) | Y | ? | ? | – | `bookkeeping` | Bokföring | `GET /3/settings/lockedperiod` → `LockedPeriod.EndDate` | `developer.fortnox.se/documentation/resources/locked-period/` exists; path and shape from the OpenAPI-derived clients | **Setting** a lock via the API was not verified, and the system never tries | Read implemented; the lock is re-read at submission time and any proposal inside it is refused | **partial (OpenAPI-derived)** |
 | 6 | Customers | 2 | Yes | Y | ? | ? | – | `invoice` (not verified) | Fakturering | `/3/customers` (resource documented) | Resource listed in official documentation index | Verb-level and scope name unverified | Import read-only from the mock adapter | **partial** |
 | 7 | Customer invoices | 2 | Yes | Y | ? | ? | ? | `invoice` (not verified) | Fakturering | `/3/invoices` | `developer.fortnox.se/documentation/resources/invoices/` exists | Bookkeeping an invoice via the API not verified | Step 2 reports `not_implemented`; invoices are imported as source data only | **partial** |
 | 8 | Invoice payments | 2, 3 | Yes | Y | ? | ? | ? | `invoice` (not verified) | Fakturering | `/3/invoicepayments` (resource documented) | Websocket event `invoicepayment-bookkeep-v1` documented, implying a bookkeep operation exists | Verb-level unverified | Read-only import | **partial** |

@@ -6,12 +6,13 @@ import {
   seedDemoData,
   type DbHandle,
 } from '@trimeros/db';
-import { MockFortnoxAdapter } from '@trimeros/fortnox';
+import { MockFortnoxAdapter, staticResolver } from '@trimeros/fortnox';
 import { DEMO_PERIOD, buildSyntheticDataset } from '@trimeros/testing';
 import { DatabaseWorkflowEngine } from '@trimeros/workflow';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
+import { createFortnoxIntegration } from '../src/integrations/fortnox.js';
 import { appConfigFromEnv } from '../src/config.js';
 import type { Runtime } from '../src/runtime.js';
 
@@ -36,6 +37,8 @@ describe('API (integration)', () => {
       db: handle,
       repos,
       fortnox,
+      fortnoxResolver: staticResolver(fortnox),
+      fortnoxIntegration: createFortnoxIntegration(appConfigFromEnv({}), repos),
       model,
       engine: new DatabaseWorkflowEngine({ repos, fortnox, model, shadowMode: true }),
       close: () => handle.close(),

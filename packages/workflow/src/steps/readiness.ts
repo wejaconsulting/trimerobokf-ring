@@ -1,5 +1,13 @@
-import { FORTNOX_DATA_SOURCE_KIND, periodKeyOf, previousPeriods } from '@trimeros/domain';
+import {
+  FORTNOX_CONNECTION_KIND,
+  FORTNOX_DATA_SOURCE_KIND,
+  periodEnd,
+  periodKeyOf,
+  previousPeriods,
+  voucherSchema,
+} from '@trimeros/domain';
 import type { LedgerSnapshot, Voucher } from '@trimeros/domain';
+import { FortnoxApiError, FortnoxConnectionError } from '@trimeros/fortnox';
 import type { StepContext } from '../run-context.js';
 import type { StepOutcome } from '../types.js';
 
@@ -16,20 +24,37 @@ import type { StepOutcome } from '../types.js';
  * of accounts you could not verify produces confident nonsense.
  */
 export async function stepAgentReadiness(ctx: StepContext): Promise<StepOutcome> {
-  const capabilities = await ctx.fortnox.capabilities();
-  ctx.state.capabilities = capabilities;
+  const { dataSource } = ctx;
+  if (dataSource.kind === 'none') {
+    return {
+      status: 'blocked',
+      reasonCode: 'no_integration_connection',
+      message: dataSource.reason ?? 'Ingen Fortnox-anslutning är konfigurerad för klienten.',
+    };
+  }
 
-  // Named explicitly: a client may also hold a `fortnox_oauth` connection for a
-  // live grant, and that row says nothing about where this run reads its data.
-  // Omitting the kind would make the answer depend on row order.
+  // The connection row that backs the resolved source is named explicitly: a
+  // client may hold both a demo-data row and a live OAuth grant, and the run
+  // must check the one it is actually reading from.
   const connection = await ctx.repos.getIntegrationConnection(
     { tenantId: ctx.tenantId, clientId: ctx.clientId },
-    FORTNOX_DATA_SOURCE_KIND,
+    dataSource.kind === 'real' ? FORTNOX_CONNECTION_KIND : FORTNOX_DATA_SOURCE_KIND,
   );
   if (!connection) {
-    return { status: 'blocked', reasonCode: 'no_integration_connection', message: 'Ingen Fortnox-anslutning är konfigurerad för klienten.' };
+    return {
+      status: 'blocked',
+      reasonCode: 'no_integration_connection',
+      message: 'Ingen Fortnox-anslutning är konfigurerad för klienten.',
+    };
   }
-  if (connection.writesEnabled) {
+  if (dataSource.kind === 'real' && connection.status !== 'connected') {
+    return {
+      status: 'blocked',
+      reasonCode: 'fortnox_reconnect_required',
+      message: 'Fortnox-anslutningen behöver återanslutas innan en avstämning kan köras.',
+    };
+  }
+  if (connection.writesEnabled && ctx.shadowMode) {
     // Defence in depth: a run must never proceed against a write-enabled
     // connection while the system is in shadow mode.
     return {
@@ -38,6 +63,35 @@ export async function stepAgentReadiness(ctx: StepContext): Promise<StepOutcome>
       message: 'Anslutningen har skrivning aktiverad, vilket inte är tillåtet i shadow mode.',
     };
   }
+
+  try {
+    return await importPeriod(ctx, connection.mode);
+  } catch (error) {
+    // A live account that answers badly is a blocked run with a plain reason,
+    // not a stack trace. Nothing below carries a credential.
+    if (error instanceof FortnoxConnectionError) {
+      return {
+        status: 'blocked',
+        reasonCode: `fortnox_${error.code}`,
+        message: `Fortnox-anslutningen kunde inte användas (${error.code}). Återanslut klienten under Inställningar → Fortnox.`,
+      };
+    }
+    if (error instanceof FortnoxApiError) {
+      return {
+        status: 'blocked',
+        reasonCode: error.requiresReconnect ? 'fortnox_reconnect_required' : 'fortnox_read_failed',
+        message: error.requiresReconnect
+          ? 'Fortnox avvisade åtkomsttoken (401). Återanslut klienten under Inställningar → Fortnox.'
+          : `Fortnox svarade ${error.status} på ${error.path}${error.fortnoxMessage ? `: ${error.fortnoxMessage}` : ''}.`,
+      };
+    }
+    throw error;
+  }
+}
+
+async function importPeriod(ctx: StepContext, connectionMode: string): Promise<StepOutcome> {
+  const capabilities = await ctx.fortnox.capabilities();
+  ctx.state.capabilities = capabilities;
 
   const financialYears = await ctx.fortnox.listFinancialYears();
   const periodStartDate = `${ctx.periodKey}-01`;
@@ -48,7 +102,7 @@ export async function stepAgentReadiness(ctx: StepContext): Promise<StepOutcome>
     return {
       status: 'blocked',
       reasonCode: 'no_financial_year',
-      message: `Inget räkenskapsår täcker ${ctx.periodKey}.`,
+      message: `Inget räkenskapsår täcker ${ctx.periodKey}. Skapa räkenskapsåret i Fortnox och kör om.`,
     };
   }
 
@@ -71,10 +125,31 @@ export async function stepAgentReadiness(ctx: StepContext): Promise<StepOutcome>
   }
 
   // --- import the period and its history window --------------------------
+  const scope = { tenantId: ctx.tenantId, clientId: ctx.clientId };
   const historyKeys = previousPeriods(ctx.periodKey, ctx.policy.historyWindowMonths);
   const historyVouchers: Voucher[] = [];
+  let historyFromCache = 0;
   for (const key of historyKeys) {
-    historyVouchers.push(...(await ctx.fortnox.listVouchers(key)));
+    // A period Fortnox reports as locked cannot change, so its vouchers are
+    // read from the copies an earlier run stored. Against a real account this
+    // is the difference between a run that takes seconds and one that
+    // re-fetches a year of vouchers one by one. Demo data is never cached, so
+    // a client moved from demo data to a live account starts clean.
+    const cacheable =
+      ctx.dataSource.kind === 'real' &&
+      locked.lockedThrough !== null &&
+      periodEnd(key) <= locked.lockedThrough;
+    const cached = cacheable ? await cachedVouchers(ctx, key) : null;
+    if (cached && cached.length > 0) {
+      historyVouchers.push(...cached);
+      historyFromCache += cached.length;
+      continue;
+    }
+    const fetched = await ctx.fortnox.listVouchers(key);
+    historyVouchers.push(...fetched);
+    if (cacheable && fetched.length > 0) {
+      await ctx.repos.upsertImportedRecords(fetched.map((v) => voucherRecord(ctx, v)));
+    }
   }
 
   const [vouchers, supplierInvoices, customerInvoices, payments, bankTransactions] = await Promise.all([
@@ -114,8 +189,6 @@ export async function stepAgentReadiness(ctx: StepContext): Promise<StepOutcome>
   };
 
   // --- persist the normalised copies -------------------------------------
-  const scope = { tenantId: ctx.tenantId, clientId: ctx.clientId };
-
   await ctx.repos.upsertImportedRecords([
     ...accounts.map((a) => ({
       id: `ir-${ctx.clientId}-account-${a.number}`,
@@ -128,17 +201,7 @@ export async function stepAgentReadiness(ctx: StepContext): Promise<StepOutcome>
       payload: a,
       contentHash: hash(a),
     })),
-    ...vouchers.map((v) => ({
-      id: `ir-${ctx.clientId}-voucher-${v.id}`,
-      tenantId: ctx.tenantId,
-      clientId: ctx.clientId,
-      closeRunId: ctx.closeRunId,
-      kind: 'voucher',
-      externalId: v.id,
-      periodKey: periodKeyOf(v.transactionDate),
-      payload: v,
-      contentHash: hash(v),
-    })),
+    ...vouchers.map((v) => voucherRecord(ctx, v)),
     ...supplierInvoices.map((i) => ({
       id: `ir-${ctx.clientId}-si-${i.id}`,
       tenantId: ctx.tenantId,
@@ -192,17 +255,58 @@ export async function stepAgentReadiness(ctx: StepContext): Promise<StepOutcome>
     operation: 'import.records_ingested',
     actor: { kind: 'system', id: 'workflow-engine' },
     result: 'ok',
-    inputRefs: [`period:${ctx.periodKey}`, `adapter:${ctx.fortnox.adapterName}`],
+    inputRefs: [
+      `period:${ctx.periodKey}`,
+      `adapter:${ctx.fortnox.adapterName}`,
+      `source:${ctx.dataSource.kind}`,
+      `vouchers:${vouchers.length}`,
+      `history_vouchers:${historyVouchers.length}`,
+      `history_from_cache:${historyFromCache}`,
+    ],
   });
 
   const unavailable = capabilities.unavailable.length;
+  const sourceLabel = ctx.dataSource.kind === 'real' ? `Fortnox (${ctx.dataSource.label})` : ctx.dataSource.label;
   return {
     status: 'completed',
     message:
-      `Anslutning ${connection.mode}, räkenskapsår ${financialYear.fromDate}–${financialYear.toDate}, ` +
+      `Datakälla ${sourceLabel}, anslutning ${connectionMode}, räkenskapsår ${financialYear.fromDate}–${financialYear.toDate}, ` +
       `${accounts.length} konton, ${vouchers.length} verifikationer i perioden, ` +
-      `${historyVouchers.length} i historiken (${ctx.policy.historyWindowMonths} mån). ` +
+      `${historyVouchers.length} i historiken (${ctx.policy.historyWindowMonths} mån` +
+      `${historyFromCache > 0 ? `, ${historyFromCache} från cache` : ''}). ` +
       `${unavailable} capability/capabilities saknas i publikt API.`,
+  };
+}
+
+/** Vouchers a previous run stored for a period, or null if there are none. */
+async function cachedVouchers(ctx: StepContext, periodKey: string): Promise<Voucher[] | null> {
+  const payloads = await ctx.repos.listImportedRecordPayloads(
+    { tenantId: ctx.tenantId, clientId: ctx.clientId },
+    'voucher',
+    periodKey,
+  );
+  if (payloads.length === 0) return null;
+  const vouchers: Voucher[] = [];
+  for (const payload of payloads) {
+    const parsed = voucherSchema.safeParse(payload);
+    // One unreadable copy invalidates the cache for the period: fetch fresh.
+    if (!parsed.success) return null;
+    vouchers.push(parsed.data);
+  }
+  return vouchers;
+}
+
+function voucherRecord(ctx: StepContext, v: Voucher) {
+  return {
+    id: `ir-${ctx.clientId}-voucher-${v.id}`,
+    tenantId: ctx.tenantId,
+    clientId: ctx.clientId,
+    closeRunId: ctx.closeRunId,
+    kind: 'voucher',
+    externalId: v.id,
+    periodKey: periodKeyOf(v.transactionDate),
+    payload: v,
+    contentHash: hash(v),
   };
 }
 

@@ -9,12 +9,14 @@ import {
   FORTNOX_CONNECTION_KIND,
   MockFortnoxAdapter,
   generateEncryptionKey,
+  staticResolver,
 } from '@trimeros/fortnox';
 import { buildSyntheticDataset } from '@trimeros/testing';
 import { DatabaseWorkflowEngine } from '@trimeros/workflow';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
+import { createFortnoxIntegration } from '../src/integrations/fortnox.js';
 import { appConfigFromEnv } from '../src/config.js';
 import type { Runtime } from '../src/runtime.js';
 
@@ -81,11 +83,14 @@ async function makeApp(env: Record<string, string>, extra: Partial<Runtime['conf
     timeoutMs: 5000,
     maxRetries: 0,
   });
+  const config = { ...appConfigFromEnv(env), logLevel: 'silent', ...extra };
   const runtime: Runtime = {
-    config: { ...appConfigFromEnv(env), logLevel: 'silent', ...extra },
+    config,
     db: handle,
     repos,
     fortnox,
+    fortnoxResolver: staticResolver(fortnox),
+    fortnoxIntegration: createFortnoxIntegration(config, repos),
     model,
     engine: new DatabaseWorkflowEngine({ repos, fortnox, model, shadowMode: true }),
     close: async () => {},

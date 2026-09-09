@@ -35,6 +35,18 @@ export interface WorkflowEngine {
   startCloseRun(input: StartCloseRunInput): Promise<{ closeRunId: string }>;
   executeCloseRun(tenantId: string, closeRunId: string): Promise<CloseRunSummary>;
   getSummary(tenantId: string, closeRunId: string): Promise<CloseRunSummary>;
+  /** Books approved proposals through the write gate. See submit.ts. */
+  submitApprovedProposals(
+    tenantId: string,
+    closeRunId: string,
+    proposalIds?: readonly string[],
+  ): Promise<SubmissionSummary>;
+}
+
+export interface SubmissionSummary {
+  readonly submitted: readonly { proposalId: string; fortnoxVoucherId: string; reference: string }[];
+  readonly blocked: readonly { proposalId: string; reasons: readonly string[] }[];
+  readonly failed: readonly { proposalId: string; error: string }[];
 }
 
 export interface StepOutcome {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Repositories } from '@trimeros/db';
 import type { ApprovalDecisionKind } from '@trimeros/domain';
+import { hashPayload } from '@trimeros/fortnox';
 import { createAuditWriter } from './audit.js';
 
 /**
@@ -11,6 +12,10 @@ import { createAuditWriter } from './audit.js';
  * cannot, because this module has no Fortnox adapter and no mail client in
  * scope. `shadowOnly` is written as `true` on every decision so the record
  * itself carries that fact for anyone auditing it later.
+ *
+ * What an approval *does* carry is the hash of the exact payload the person
+ * approved. Booking is a separate, later step (`submitApprovedProposals`)
+ * that re-hashes the payload and refuses if a single byte differs.
  */
 
 export interface RecordDecisionInput {
@@ -59,7 +64,18 @@ export async function recordReviewDecision(
   if (!reviewItem) throw new Error(`Finding ${input.findingId} has no review item`);
 
   const proposals = await repos.listProposalsForFinding(scope, input.findingId);
-  const proposalId = proposals[0]?.id ?? null;
+  const proposal = proposals[0];
+  const proposalId = proposal?.id ?? null;
+
+  // The bytes this decision approves. An edited proposal binds to the edited
+  // payload; a plain approval binds to the payload that was simulated.
+  const approvedPayload =
+    input.kind === 'edit_proposal' && input.editedPayload
+      ? input.editedPayload
+      : input.kind === 'approve'
+        ? (proposal?.simulatedFortnoxPayload ?? null)
+        : null;
+  const approvedPayloadHash = approvedPayload ? hashPayload(approvedPayload) : null;
 
   const approvalDecisionId = randomUUID();
   await repos.insertApprovalDecision({
@@ -71,11 +87,25 @@ export async function recordReviewDecision(
     proposalId,
     kind: input.kind,
     decidedByUserId: input.decidedByUserId,
+    actorKind: 'user',
     comment: input.comment ?? null,
     editedPayload: input.editedPayload ?? null,
-    // Phase 1: an approval is always shadow-only.
+    approvedPayloadHash,
+    // The decision itself never writes to Fortnox.
     shadowOnly: true,
   });
+
+  if (proposal) {
+    const proposalStatus =
+      input.kind === 'approve' || input.kind === 'edit_proposal'
+        ? 'approved_shadow'
+        : input.kind === 'reject'
+          ? 'rejected'
+          : null;
+    if (proposalStatus && proposal.status !== 'submitted') {
+      await repos.updateProposal(scope, proposal.id, { status: proposalStatus });
+    }
+  }
 
   const findingStatus = FINDING_STATUS_BY_KIND[input.kind];
   const reviewItemStatus = REVIEW_STATUS_BY_KIND[input.kind];
@@ -118,7 +148,12 @@ export async function recordReviewDecision(
     operation: 'review.decision_recorded',
     actor: { kind: 'user', id: input.decidedByUserId },
     result: 'ok',
-    inputRefs: [`finding:${input.findingId}`, `kind:${input.kind}`, `shadow_only:true`],
+    inputRefs: [
+      `finding:${input.findingId}`,
+      `kind:${input.kind}`,
+      `shadow_only:true`,
+      ...(approvedPayloadHash ? [`approved_hash:${approvedPayloadHash}`] : []),
+    ],
     ruleVersion: finding.ruleVersion,
     approvedPayload: input.editedPayload ?? null,
   });

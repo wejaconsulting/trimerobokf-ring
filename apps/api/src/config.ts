@@ -19,7 +19,16 @@ export const appConfigSchema = z.object({
   logLevel: z.string().default('info'),
   shadowMode: boolFromEnv(true),
   fortnoxWritesEnabled: boolFromEnv(false),
-  fortnoxAdapter: z.enum(['mock', 'real']).default('mock'),
+  /**
+   * Which data source a client's close run reads from.
+   *  - `mock`: synthetic demo data for every client (the default; tests).
+   *  - `auto`: a real, read-only Fortnox adapter for clients with a live OAuth
+   *    connection, demo data for clients that only have the demo row.
+   *  - `real`: only live connections count; an unconnected client is blocked.
+   */
+  fortnoxAdapter: z.enum(['mock', 'real', 'auto']).default('mock'),
+  /** Must equal FORTNOX_WRITES_ACKNOWLEDGEMENT_PHRASE for writes to be enabled. */
+  fortnoxWritesAcknowledgement: z.string().default(''),
   fortnoxApiBaseUrl: z.string().default('https://api.fortnox.se'),
   /**
    * OAuth client credentials for the registered Fortnox app.
@@ -60,6 +69,7 @@ export function appConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AppConfi
     shadowMode: env.SHADOW_MODE,
     fortnoxWritesEnabled: env.FORTNOX_WRITES_ENABLED,
     fortnoxAdapter: env.FORTNOX_ADAPTER ?? 'mock',
+    fortnoxWritesAcknowledgement: env.FORTNOX_WRITES_ACKNOWLEDGEMENT,
     fortnoxApiBaseUrl: env.FORTNOX_API_BASE_URL,
     fortnoxClientId: env.FORTNOX_CLIENT_ID,
     fortnoxClientSecret: env.FORTNOX_CLIENT_SECRET,
@@ -77,21 +87,39 @@ export function appConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AppConfi
     demoPassword: env.DEMO_PASSWORD,
   });
 
-  // Phase 1 refuses to start in a configuration that could write to Fortnox.
+  // Writing to Fortnox is never one flag. The process refuses to start unless
+  // shadow mode is off AND the operator has typed the acknowledgement phrase,
+  // and even then every single write still has to pass the seven-condition
+  // gate in packages/fortnox/src/write-policy.ts.
   if (config.fortnoxWritesEnabled) {
-    throw new Error(
-      'FORTNOX_WRITES_ENABLED=true is not supported in phase 1. Writes require a future ' +
-        'feature flag, a recorded human approval and a policy check - see docs/shadow-mode.md.',
-    );
-  }
-  if (config.fortnoxAdapter === 'real') {
-    throw new Error(
-      'FORTNOX_ADAPTER=real is not supported in phase 1. Only the mock adapter is wired up.',
-    );
+    if (config.shadowMode) {
+      throw new Error(
+        'FORTNOX_WRITES_ENABLED=true requires SHADOW_MODE=false. Shadow mode blocks every write, ' +
+          'so this combination is a misconfiguration - see docs/shadow-mode.md.',
+      );
+    }
+    if (config.fortnoxWritesAcknowledgement !== FORTNOX_WRITES_ACKNOWLEDGEMENT_PHRASE) {
+      throw new Error(
+        'FORTNOX_WRITES_ENABLED=true requires FORTNOX_WRITES_ACKNOWLEDGEMENT to be set to the exact ' +
+          `phrase "${FORTNOX_WRITES_ACKNOWLEDGEMENT_PHRASE}" - see docs/shadow-mode.md.`,
+      );
+    }
+    if (config.fortnoxAdapter === 'mock') {
+      throw new Error(
+        'FORTNOX_WRITES_ENABLED=true is meaningless with FORTNOX_ADAPTER=mock: the mock adapter never writes.',
+      );
+    }
   }
 
   return config;
 }
+
+/**
+ * The sentence an operator has to put in the environment to enable writes.
+ * Swedish on purpose: the person flipping this switch is the accounting firm.
+ */
+export const FORTNOX_WRITES_ACKNOWLEDGEMENT_PHRASE =
+  'JAG FÖRSTÅR ATT DETTA BOKFÖR PÅ RIKTIGT I KLIENTERNAS FORTNOX';
 
 /**
  * Picks the bind address.

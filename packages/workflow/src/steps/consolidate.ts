@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { simulateVoucherCreate } from '@trimeros/fortnox';
+import { bookedKey } from '../submit.js';
 import { consolidate, generateProposals, proposalBalances } from '@trimeros/rules';
 import type { StepContext } from '../run-context.js';
 import type { StepOutcome } from '../types.js';
@@ -74,7 +75,10 @@ export async function stepConsolidateFindings(ctx: StepContext): Promise<StepOut
   ctx.state.proposals = proposals;
 
   const findingIdByKey = new Map(persisted.map((f) => [f.deduplicationKey, f.id]));
+  const processedKeys = ruleContext.alreadyProcessedSourceKeys;
   let simulated = 0;
+  let autoApproved = 0;
+  let alreadyBooked = 0;
 
   for (const proposal of proposals) {
     if (!proposalBalances(proposal)) {
@@ -105,6 +109,10 @@ export async function stepConsolidateFindings(ctx: StepContext): Promise<StepOut
     });
 
     const proposalId = `proposal-${ctx.closeRunId}-${hashKey(proposal.findingDeduplicationKey)}`;
+    // A correction an earlier run already booked in Fortnox is shown as such,
+    // never proposed a second time.
+    const bookedBefore = processedKeys.has(bookedKey(request.payloadHash));
+    if (bookedBefore) alreadyBooked += 1;
     await ctx.repos.insertProposal(
       {
         id: proposalId,
@@ -112,8 +120,8 @@ export async function stepConsolidateFindings(ctx: StepContext): Promise<StepOut
         clientId: ctx.clientId,
         closeRunId: ctx.closeRunId,
         findingId: findingIdByKey.get(proposal.findingDeduplicationKey) ?? null,
-        // "simulated" is the only status a proposal can reach in shadow mode.
-        status: 'simulated',
+        // "simulated" is the only status a proposal reaches before a decision.
+        status: bookedBefore ? 'already_booked' : 'simulated',
         decisionLevel: proposal.decision.level,
         decisionScore: proposal.decision.score,
         decisionReasons: [...proposal.decision.reasons],
@@ -146,6 +154,63 @@ export async function stepConsolidateFindings(ctx: StepContext): Promise<StepOut
       inputRefs: [`proposal:${proposalId}`, `hash:${request.payloadHash}`],
       proposedPayload: request.payload,
     });
+
+    // --- policy-driven approval ------------------------------------------
+    // An `automatic`-level proposal passed every hard gate and scored above
+    // the automatic threshold. When the client's policy allows it, the system
+    // records the approval itself - bound to this payload's hash exactly as a
+    // human approval would be. Whether it is then *booked* is a separate
+    // question the write gate answers at submission time.
+    const findingId = findingIdByKey.get(proposal.findingDeduplicationKey);
+    if (ctx.policy.autoBookEnabled && proposal.decision.level === 'automatic' && findingId && !bookedBefore) {
+      const alreadyDecided = (await ctx.repos.listApprovalDecisions(scope, findingId)).length > 0;
+      if (!alreadyDecided) {
+        const reviewItemId = `review-${findingId}`;
+        await ctx.repos.upsertReviewItems([
+          {
+            id: reviewItemId,
+            tenantId: ctx.tenantId,
+            clientId: ctx.clientId,
+            closeRunId: ctx.closeRunId,
+            findingId,
+            status: 'decided',
+            assignedToUserId: null,
+            decidedAt: new Date(),
+          },
+        ]);
+        const approvalDecisionId = randomUUID();
+        await ctx.repos.insertApprovalDecision({
+          id: approvalDecisionId,
+          tenantId: ctx.tenantId,
+          clientId: ctx.clientId,
+          reviewItemId,
+          findingId,
+          proposalId,
+          kind: 'approve',
+          decidedByUserId: AUTO_APPROVER_ID,
+          actorKind: 'system',
+          comment: `Automatiskt godkänd enligt klientpolicy: beslutsnivå automatic (${proposal.decision.score.toFixed(2)}), belopp inom gräns.`,
+          editedPayload: null,
+          approvedPayloadHash: request.payloadHash,
+          shadowOnly: true,
+        });
+        await ctx.repos.updateFindingStatus(scope, findingId, 'approved');
+        await ctx.repos.updateProposal(scope, proposalId, { status: 'approved_shadow' });
+        autoApproved += 1;
+        await ctx.audit({
+          operation: 'review.auto_approved',
+          actor: { kind: 'system', id: AUTO_APPROVER_ID },
+          result: 'ok',
+          inputRefs: [
+            `finding:${findingId}`,
+            `proposal:${proposalId}`,
+            `approved_hash:${request.payloadHash}`,
+            `score:${proposal.decision.score}`,
+          ],
+          ruleVersion: result.ruleSetVersion,
+        });
+      }
+    }
   }
 
   // --- review queue -------------------------------------------------------
@@ -174,9 +239,14 @@ export async function stepConsolidateFindings(ctx: StepContext): Promise<StepOut
     message:
       `${result.stats.rawCount} observationer konsoliderades till ${result.stats.consolidatedCount} avvikelser ` +
       `(${result.stats.mergedCount} sammanslagna). ${result.stats.blockingCount} blockerande. ` +
-      `${simulated} simulerat Fortnox-anrop.`,
+      `${simulated} simulerat Fortnox-anrop.` +
+      (autoApproved > 0 ? ` ${autoApproved} förslag godkända automatiskt enligt klientpolicy.` : '') +
+      (alreadyBooked > 0 ? ` ${alreadyBooked} förslag redan bokförda i en tidigare körning.` : ''),
   };
 }
+
+/** The system actor that records policy-driven approvals. */
+export const AUTO_APPROVER_ID = 'system:policy-auto-approver';
 
 function mergedRuleIds(finding: { ruleId: string } & Record<string, unknown>): string[] {
   const merged = finding.mergedFromRuleIds;

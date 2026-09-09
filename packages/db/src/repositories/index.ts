@@ -729,6 +729,117 @@ export function createRepositories(db: Database) {
           ),
         );
     },
+
+    // --- firm operations ----------------------------------------------------
+    async createClient(
+      client: typeof s.clients.$inferInsert,
+      policy: Omit<typeof s.clientAccountingPolicies.$inferInsert, 'tenantId' | 'clientId'>,
+    ): Promise<ClientRow> {
+      const [created] = await db.insert(s.clients).values(client).returning();
+      if (!created) throw new Error('Failed to create client');
+      await db
+        .insert(s.clientAccountingPolicies)
+        .values({ ...policy, tenantId: created.tenantId, clientId: created.id })
+        .onConflictDoNothing();
+      return created;
+    },
+
+    async updatePolicy(
+      scope: ClientScope,
+      patch: Partial<Omit<typeof s.clientAccountingPolicies.$inferInsert, 'id' | 'tenantId' | 'clientId'>>,
+    ): Promise<PolicyRow | undefined> {
+      const [row] = await db
+        .update(s.clientAccountingPolicies)
+        .set({ ...patch, updatedAt: new Date() })
+        .where(
+          and(
+            eq(s.clientAccountingPolicies.tenantId, scope.tenantId),
+            eq(s.clientAccountingPolicies.clientId, scope.clientId),
+          ),
+        )
+        .returning();
+      return row;
+    },
+
+    /** Normalised payloads of one record kind in one period, for the history cache. */
+    async listImportedRecordPayloads(scope: ClientScope, kind: string, periodKey: string): Promise<unknown[]> {
+      const rows = await db
+        .select({ payload: s.importedRecords.payload })
+        .from(s.importedRecords)
+        .where(
+          and(
+            eq(s.importedRecords.tenantId, scope.tenantId),
+            eq(s.importedRecords.clientId, scope.clientId),
+            eq(s.importedRecords.kind, kind),
+            eq(s.importedRecords.periodKey, periodKey),
+          ),
+        );
+      return rows.map((r) => r.payload);
+    },
+
+    async getProposal(scope: TenantScope, proposalId: string): Promise<ProposalRow | undefined> {
+      const [row] = await db
+        .select()
+        .from(s.bookingProposals)
+        .where(and(eq(s.bookingProposals.tenantId, scope.tenantId), eq(s.bookingProposals.id, proposalId)))
+        .limit(1);
+      return row;
+    },
+
+    async updateProposal(
+      scope: TenantScope,
+      proposalId: string,
+      patch: Partial<typeof s.bookingProposals.$inferInsert>,
+    ): Promise<void> {
+      await db
+        .update(s.bookingProposals)
+        .set(patch)
+        .where(and(eq(s.bookingProposals.tenantId, scope.tenantId), eq(s.bookingProposals.id, proposalId)));
+    },
+
+    /**
+     * Claims a proposal for submission: a compare-and-set from an approved
+     * status to `submitting`. Two concurrent submitters cannot both win, which
+     * is what stops one approval from producing two vouchers.
+     */
+    async claimProposalForSubmission(scope: TenantScope, proposalId: string): Promise<ProposalRow | undefined> {
+      const [row] = await db
+        .update(s.bookingProposals)
+        .set({ status: 'submitting' })
+        .where(
+          and(
+            eq(s.bookingProposals.tenantId, scope.tenantId),
+            eq(s.bookingProposals.id, proposalId),
+            eq(s.bookingProposals.status, 'approved_shadow'),
+          ),
+        )
+        .returning();
+      return row;
+    },
+
+    async listProposalsByStatus(scope: TenantScope, closeRunId: string, statuses: readonly string[]): Promise<ProposalRow[]> {
+      if (statuses.length === 0) return [];
+      return db
+        .select()
+        .from(s.bookingProposals)
+        .where(
+          and(
+            eq(s.bookingProposals.tenantId, scope.tenantId),
+            eq(s.bookingProposals.closeRunId, closeRunId),
+            inArray(s.bookingProposals.status, [...statuses]),
+          ),
+        )
+        .orderBy(asc(s.bookingProposals.createdAt));
+    },
+
+    async countProposalsByStatus(scope: TenantScope, closeRunId: string): Promise<Record<string, number>> {
+      const rows = await db
+        .select({ status: s.bookingProposals.status, count: sql<number>`count(*)::int` })
+        .from(s.bookingProposals)
+        .where(and(eq(s.bookingProposals.tenantId, scope.tenantId), eq(s.bookingProposals.closeRunId, closeRunId)))
+        .groupBy(s.bookingProposals.status);
+      return Object.fromEntries(rows.map((r) => [r.status, r.count]));
+    },
   };
 }
 

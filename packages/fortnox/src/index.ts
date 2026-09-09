@@ -7,4 +7,7 @@ export * from './payload.js';
 export * from './mock-adapter.js';
 export * from './real-adapter.js';
 export * from './factory.js';
+export * from './http/client.js';
+export * from './http/rate-limiter.js';
+export { kronorToOre, voucherIdOf } from './wire.js';
 export * from './oauth/index.js';

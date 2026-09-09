@@ -110,9 +110,9 @@ is three short steps instead of one:
 | `SEED_ON_BOOT` | `true` | Seeds the demo tenant on start; idempotent |
 | `DEMO_USER` / `DEMO_PASSWORD` | `demo` / your choice | Password gate |
 | `WEB_ORIGIN` | the web service's URL | Replaces the permissive local CORS |
-| `SHADOW_MODE` | `true` | Must stay true |
-| `FORTNOX_WRITES_ENABLED` | `false` | The API refuses to start otherwise |
-| `FORTNOX_ADAPTER` | `mock` | The API refuses to start otherwise |
+| `SHADOW_MODE` | `true` | Keep true until a full period has been reviewed - see `docs/shadow-mode.md` |
+| `FORTNOX_WRITES_ENABLED` | `false` | Turning it on also needs `SHADOW_MODE=false`, `FORTNOX_WRITES_ACKNOWLEDGEMENT` and a non-mock adapter |
+| `FORTNOX_ADAPTER` | `mock` or `auto` | `auto` reads connected clients from Fortnox; needs the OAuth variables in `docs/fortnox-oauth.md` |
 | `MODEL_PROVIDER` | `fake` | No AI key needed |
 
 **Web**

@@ -6,6 +6,7 @@ import {
 } from '@trimeros/agent';
 import { WORKFLOW_STEPS, assessCompletion, formatSek, type StepState } from '@trimeros/domain';
 import type { StepContext } from '../run-context.js';
+import { submitApprovedProposals } from '../submit.js';
 import type { StepOutcome } from '../types.js';
 
 /**
@@ -82,6 +83,29 @@ export async function stepAccountantReport(ctx: StepContext): Promise<StepOutcom
  * is exactly the signal the consultant's dashboard needs.
  */
 export async function stepHumanReview(ctx: StepContext): Promise<StepOutcome> {
+  // Live booking, when - and only when - the operator switched it on. Every
+  // proposal still has to pass the seven-condition gate individually; the
+  // step only reports what happened.
+  let booked = '';
+  if (ctx.fortnoxWritesEnabled && !ctx.shadowMode) {
+    const result = await submitApprovedProposals(ctx.repos, {
+      tenantId: ctx.tenantId,
+      clientId: ctx.clientId,
+      closeRunId: ctx.closeRunId,
+      correlationId: ctx.correlationId,
+      dataSource: ctx.dataSource,
+      shadowMode: ctx.shadowMode,
+      featureFlagEnabled: ctx.fortnoxWritesEnabled,
+    });
+    if (result.submitted.length + result.blocked.length + result.failed.length > 0) {
+      booked =
+        ` ${result.submitted.length} förslag bokförda i Fortnox` +
+        (result.blocked.length > 0 ? `, ${result.blocked.length} stoppade av skrivgrinden` : '') +
+        (result.failed.length > 0 ? `, ${result.failed.length} misslyckade` : '') +
+        '.';
+    }
+  }
+
   const open = await ctx.repos.listFindings(
     { tenantId: ctx.tenantId },
     { closeRunId: ctx.closeRunId, status: ['open', 'in_review', 'information_requested'] },
@@ -89,13 +113,13 @@ export async function stepHumanReview(ctx: StepContext): Promise<StepOutcome> {
   const needingConsultant = open.filter((f) => f.requiresConsultant);
 
   if (needingConsultant.length === 0) {
-    return { status: 'completed', message: 'Inga öppna avvikelser kräver konsult.' };
+    return { status: 'completed', message: `Inga öppna avvikelser kräver konsult.${booked}` };
   }
 
   return {
     status: 'blocked',
     reasonCode: 'awaiting_human_review',
-    message: `${needingConsultant.length} avvikelse(r) väntar på konsultens beslut.`,
+    message: `${needingConsultant.length} avvikelse(r) väntar på konsultens beslut.${booked}`,
   };
 }
 

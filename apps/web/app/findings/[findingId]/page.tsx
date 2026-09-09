@@ -328,8 +328,14 @@ export default async function FindingPage({ params }: { params: Promise<{ findin
                       ) : null}
                     </div>
                     <div className="faint">
-                      {decision.decidedByUserId} ·{' '}
+                      {decision.actorKind === 'system' ? 'Systemet (klientpolicy)' : decision.decidedByUserId} ·{' '}
                       {new Date(decision.createdAt).toLocaleString('sv-SE')}
+                      {decision.approvedPayloadHash ? (
+                        <>
+                          {' '}
+                          · bunden till payload <span className="mono">{decision.approvedPayloadHash}</span>
+                        </>
+                      ) : null}
                     </div>
                     {decision.comment ? (
                       <div className="muted" style={{ fontSize: 12.5 }}>
@@ -376,6 +382,11 @@ function Proposal({ proposal }: { proposal: ProposalDetail }) {
         <DecisionBadge level={proposal.decisionLevel} />
         <Meter value={proposal.decisionScore} tone={decisionTone(proposal.decisionLevel)} />
         <StatusBadge status={proposal.status} />
+        {proposal.fortnoxReference ? (
+          <span className="badge" data-tone="clear">
+            Fortnox {proposal.fortnoxReference}
+          </span>
+        ) : null}
       </div>
 
       <p className="muted" style={{ marginTop: 0, fontSize: 13, maxWidth: '72ch' }}>

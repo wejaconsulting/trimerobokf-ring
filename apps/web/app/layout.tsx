@@ -57,13 +57,32 @@ function ShadowNotice({ status, reachable }: { status: SystemStatus | null; reac
     );
   }
 
+  const source =
+    status.fortnoxAdapter === 'mock'
+      ? 'demodata'
+      : status.fortnoxAdapter === 'auto'
+        ? 'Fortnox för anslutna klienter'
+        : 'endast Fortnox';
+
   if (status.shadowMode && !status.fortnoxWritesEnabled) {
     return (
       <div className="shadow-chip">
         <span className="dot" aria-hidden="true" />
         <span>
           <strong>SHADOW MODE</strong>
-          Inga Fortnox-anrop skickas. Adapter: {status.fortnoxAdapter}, modell: {status.modelProvider}.
+          Läser {source}. Inga skrivanrop skickas. Modell: {status.modelProvider}.
+        </span>
+      </div>
+    );
+  }
+
+  if (!status.fortnoxWritesEnabled) {
+    return (
+      <div className="shadow-chip">
+        <span className="dot" aria-hidden="true" />
+        <span>
+          <strong>LÄSLÄGE</strong>
+          Shadow mode av, skrivflaggan av. Läser {source}; ingenting bokförs.
         </span>
       </div>
     );
@@ -73,8 +92,8 @@ function ShadowNotice({ status, reachable }: { status: SystemStatus | null; reac
     <div className="shadow-chip is-alarm">
       <span className="dot" aria-hidden="true" />
       <span>
-        <strong>VARNING</strong>
-        Skrivning mot Fortnox är aktiverad.
+        <strong>LIVE-BOKFÖRING</strong>
+        Godkända förslag bokförs i Fortnox via skrivgrinden. Läser {source}.
       </span>
     </div>
   );
@@ -87,7 +106,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   const summary = primary?.summary;
 
   const nav: NavItem[] = [
-    { href: '/', label: 'Kundöversikt', exact: true },
+    { href: '/', label: 'Byråöversikt', exact: true },
     ...(run
       ? [
           { href: `/runs/${run.id}`, label: 'Periodvy' },
@@ -140,7 +159,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                 {clients.map(({ client, latestRun, summary: s }) => (
                   <Link
                     key={client.id}
-                    href={latestRun ? `/runs/${latestRun.id}` : '/'}
+                    href={latestRun ? `/runs/${latestRun.id}` : `/klienter/${encodeURIComponent(client.id)}`}
                     className="side-client"
                   >
                     <div className="side-client-name">{client.name}</div>
