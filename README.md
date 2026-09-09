@@ -135,8 +135,10 @@ Four desktop-first views:
 
 | View | Shows |
 | --- | --- |
-| **Client overview** (`/`) | Per client: period, close-run status, completed steps, and counts for clear / review / missing documentation / findings / blockers. |
-| **Period view** (`/runs/:id`) | All 14 workflow steps with status: pending, running, completed, blocked, not implemented, failed. Plus the explicit reasons the period cannot close. |
+| **Firm overview** (`/`) | Automation rate across the firm, data sources, approved and booked proposals; run a period for every client; add a client. Per client: period, data source, close-run status, completed steps, and counts for clear / review / missing documentation / findings / blockers. |
+| **Client settings** (`/klienter/:id`) | The accounting policy in kronor (materiality, automation limit, history window, dimension requirements) and the `autoBookEnabled` switch that lets the system approve `automatic`-level proposals itself. |
+| **Fortnox connection** (`/installningar/fortnox`) | Connect a client's Fortnox over OAuth (read scopes only), verify, disconnect, and the audited per-client write switch. |
+| **Period view** (`/runs/:id`) | All 14 workflow steps with status: pending, running, completed, blocked, not implemented, failed. The data source the run read from, proposal counts (approved / booked / already booked), the "book approved proposals" action, and the explicit reasons the period cannot close. |
 | **Review queue** (`/runs/:id/queue`) | Filter by clear, review, missing documentation, anomaly, blocking, amount range, account, supplier and decision score. |
 | **Finding detail** (`/findings/:id`) | What was detected, the original data, the evidence, the historical comparison, the matched rules, the booking proposal with debit/credit, VAT and dimensions, **the simulated Fortnox payload**, the audit history, and the actions: approve, reject, edit proposal, request information. |
 
@@ -189,7 +191,8 @@ Full detail, trust boundaries and the Temporal decision: [`docs/architecture.md`
 | [`docs/fortnox-capability-matrix.md`](docs/fortnox-capability-matrix.md) | 31 capabilities verified against official Fortnox documentation, with limitations, fallbacks and status. **Read the verification-method section first.** |
 | [`docs/security-and-permissions.md`](docs/security-and-permissions.md) | Tenant isolation, secrets, the audit log, the model boundary, and the known gaps. |
 | [`docs/accounting-decision-model.md`](docs/accounting-decision-model.md) | The three levels, the ten signals and their weights, the validations, the anomaly rules, deduplication. |
-| [`docs/shadow-mode.md`](docs/shadow-mode.md) | What is forbidden, how it is enforced, how it is tested, and what lifting it would require. |
+| [`docs/shadow-mode.md`](docs/shadow-mode.md) | What is forbidden, how it is enforced, how it is tested, and the exact sequence of switches that lifts it. |
+| [`docs/autonomi.md`](docs/autonomi.md) | *På svenska.* Hur systemet tar över rutinarbetet, brytarna i ordning, skrivgrindens sju villkor och vad som aldrig händer. |
 | [`docs/next-phases.md`](docs/next-phases.md) | What to build next, in dependency order. |
 | [`docs/deployment.md`](docs/deployment.md) | Hosting on Render or Railway, the password gate, and what was and was not verified. |
 | [`docs/fortnox-oauth.md`](docs/fortnox-oauth.md) | Connecting a client's Fortnox account over OAuth: setup, the read-only boundary, token handling, and which details are still unverified. |
@@ -207,9 +210,9 @@ All settings live in `.env` (see `.env.example`). The ones that matter:
 | `DATABASE_URL` | `postgres://trimeros:trimeros@localhost:5433/trimeros` | Matches `docker-compose.yml` |
 | `API_PORT` | `4000` | |
 | `API_BASE_URL` | `http://127.0.0.1:4000` | Used by the review app |
-| `SHADOW_MODE` | `true` | **Must stay true.** Parsed safely: an unrecognised value keeps it on. |
-| `FORTNOX_WRITES_ENABLED` | `false` | **The API refuses to start if this is true.** |
-| `FORTNOX_ADAPTER` | `mock` | **The API refuses to start with `real`.** |
+| `SHADOW_MODE` | `true` | Nothing is sent to Fortnox while true. Parsed safely: an unrecognised value keeps it on. |
+| `FORTNOX_WRITES_ENABLED` | `false` | Needs `SHADOW_MODE=false`, the `FORTNOX_WRITES_ACKNOWLEDGEMENT` phrase and a non-mock adapter, or the API refuses to start. See [`docs/shadow-mode.md`](docs/shadow-mode.md). |
+| `FORTNOX_ADAPTER` | `mock` | `mock` (demo data), `auto` (Fortnox for connected clients, demo data for the rest) or `real` (Fortnox only). |
 | `MODEL_PROVIDER` | `fake` | `fake` is deterministic and offline. `openai` needs `OPENAI_API_KEY`; without one it falls back to `fake` rather than failing a run. |
 
 No secrets are committed. `.env` is git-ignored and every secret field in `.env.example` is

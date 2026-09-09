@@ -1,6 +1,6 @@
 import Link from 'next/link';
-import { connectFortnox, disconnectFortnox, verifyFortnox } from '../../actions';
-import { api, type FortnoxConnection, type FortnoxIntegrationStatus } from '../../../lib/api';
+import { connectFortnox, disconnectFortnox, toggleFortnoxWrites, verifyFortnox } from '../../actions';
+import { api, type FortnoxConnection, type FortnoxIntegrationStatus, type SystemStatus } from '../../../lib/api';
 import { Crumbs, Panel } from '../../ui';
 
 export const dynamic = 'force-dynamic';
@@ -15,8 +15,9 @@ export const dynamic = 'force-dynamic';
  *    before the button, not after. Consent that follows a click is not consent.
  *  - It reports what the running system is configured to do, never what this
  *    page assumes. A connection that cannot be verified says so.
- *  - It is explicit that connecting does not yet change the analysis. The
- *    plumbing is finished; the read paths that would use it are not.
+ *  - It says what connecting changes, which depends on the server's adapter
+ *    mode, and it hosts the one per-client write switch - the third of the
+ *    write gate's seven conditions.
  */
 
 /** Plain-language descriptions of each scope on the Fortnox consent screen. */
@@ -69,10 +70,13 @@ function daysUntil(value: string | null): number | null {
 export default async function FortnoxSettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ clientId?: string; status?: string; code?: string }>;
+  searchParams: Promise<{ clientId?: string; status?: string; code?: string; writes?: string }>;
 }) {
   const params = await searchParams;
-  const clients = await api.clients().catch(() => []);
+  const [clients, system] = await Promise.all([
+    api.clients().catch(() => []),
+    api.systemStatus().catch((): SystemStatus | null => null),
+  ]);
   const clientId = params.clientId ?? clients[0]?.client.id ?? '';
 
   let status: FortnoxIntegrationStatus | null = null;
@@ -91,17 +95,25 @@ export default async function FortnoxSettingsPage({
 
   return (
     <>
-      <Crumbs items={[{ label: 'Kundöversikt', href: '/' }, { label: 'Fortnox-anslutning' }]} />
+      <Crumbs items={[{ label: 'Byråöversikt', href: '/' }, { label: 'Fortnox-anslutning' }]} />
 
       <div className="page-head" style={{ marginTop: 10 }}>
         <div>
           <h1>Fortnox-anslutning</h1>
           <div className="sub">
-            {client ? client.client.name : 'Ingen klient vald'} · anslutningen ger{' '}
+            {client ? client.client.name : 'Ingen klient vald'} · anslutningen begär{' '}
             <strong>endast läsbehörighet</strong>
           </div>
         </div>
       </div>
+
+      {params.writes ? (
+        <div className="note" data-tone={params.writes === 'on' ? 'review' : 'clear'} style={{ marginBottom: 16 }} role="status">
+          {params.writes === 'on'
+            ? 'Klientens skrivbrytare är PÅ och ändringen är loggad. Förslag bokförs bara om de dessutom passerar skrivgrindens övriga villkor.'
+            : 'Klientens skrivbrytare är AV. Ingenting bokförs för den här klienten.'}
+        </div>
+      ) : null}
 
       {params.status ? (
         <div
@@ -170,13 +182,16 @@ export default async function FortnoxSettingsPage({
           <Panel title="Vad systemet gör och inte gör">
             <div className="note" data-tone="clear" style={{ marginBottom: 12 }}>
               <strong>Systemet får:</strong> läsa bokföring och underlag, analysera perioden, skapa
-              bokföringsförslag och visa exakt vilket anrop som <em>skulle</em> skickas.
+              bokföringsförslag och visa exakt vilket anrop som skickas eller skulle skickas.
             </div>
             <div className="note" data-tone="manual">
-              <strong>Systemet får inte:</strong> bokföra i Fortnox, ändra eller ta bort något,
-              låsa perioder eller skicka mejl till dina kunder. Ingen skrivbehörighet begärs, och
-              skrivning är dessutom avstängd i koden
-              {status?.shadowMode ? ' (shadow mode är aktivt)' : ''}.
+              <strong>Systemet får aldrig:</strong> ändra eller ta bort något i Fortnox, låsa perioder eller
+              skicka mejl till dina kunder.{' '}
+              {status?.shadowMode
+                ? 'Shadow mode är aktivt: det bokför heller ingenting, oavsett vad som godkänns.'
+                : system?.fortnoxWritesEnabled
+                  ? 'Live-bokföring är påslagen på servern: ett godkänt förslag bokförs bara om klientens skrivbrytare nedan är på och förslaget passerar skrivgrindens sju villkor.'
+                  : 'Skrivflaggan på servern är av, så ingenting bokförs.'}
             </div>
             <p className="muted" style={{ fontSize: 13, marginBottom: 0 }}>
               Du kan när som helst koppla från här, eller återkalla behörigheten inne i Fortnox.
@@ -184,12 +199,22 @@ export default async function FortnoxSettingsPage({
           </Panel>
 
           <Panel title="Vad som händer efter att du anslutit">
-            <p style={{ marginTop: 0, marginBottom: 0 }}>
-              Den här versionen kopplar upp och verifierar anslutningen, men analysen körs
-              fortfarande på demodata. Inläsningen av din riktiga bokföring är nästa steg — se{' '}
-              <code className="inline">docs/next-phases.md</code>. Anslutningen är alltså
-              förberedd och testad, inte påslagen i arbetsflödet.
-            </p>
+            {system?.fortnoxAdapter === 'mock' ? (
+              <p style={{ marginTop: 0, marginBottom: 0 }}>
+                Servern kör med <code className="inline">FORTNOX_ADAPTER=mock</code>: anslutningen verifieras, men
+                körningarna läser fortfarande demodata. Sätt <code className="inline">FORTNOX_ADAPTER=auto</code> för
+                att låta anslutna klienter läsas från Fortnox och övriga från demodata, eller{' '}
+                <code className="inline">real</code> för att bara tillåta riktiga konton.
+              </p>
+            ) : (
+              <p style={{ marginTop: 0, marginBottom: 0 }}>
+                Nästa avstämning för klienten läser räkenskapsår, kontoplan, verifikationer med rader, leverantörs-
+                och kundfakturor, betalningar, kostnadsställen, projekt och låst period direkt från Fortnox
+                (adapterläge <code className="inline">{system?.fortnoxAdapter}</code>). Låsta historikperioder
+                cachas efter första körningen. Banktransaktioner och skattekonto saknar publikt API och rapporteras
+                som ej implementerade.
+              </p>
+            )}
           </Panel>
         </div>
 
@@ -286,6 +311,25 @@ export default async function FortnoxSettingsPage({
               <p className="muted" style={{ fontSize: 12.5, marginBottom: 0, marginTop: 12 }}>
                 Knappen skickar dig till Fortnox inloggning. Länken är giltig i tio minuter.
               </p>
+            </Panel>
+          ) : null}
+
+          {connection?.status === 'connected' && status?.configured ? (
+            <Panel title="Skrivbrytare för klienten">
+              <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+                Villkor 3 av 7 i skrivgrinden. {status.shadowMode ? 'Kan inte slås på medan servern kör i shadow mode.' : 'Loggas som en administrativ åtgärd.'}
+              </p>
+              <form action={toggleFortnoxWrites}>
+                <input type="hidden" name="clientId" value={clientId} />
+                <input type="hidden" name="enabled" value={connection.writesEnabled ? 'false' : 'true'} />
+                <button
+                  className={connection.writesEnabled ? 'btn' : 'btn btn-primary'}
+                  type="submit"
+                  disabled={!connection.writesEnabled && status.shadowMode}
+                >
+                  {connection.writesEnabled ? 'Stäng av skrivning för klienten' : 'Slå på skrivning för klienten'}
+                </button>
+              </form>
             </Panel>
           ) : null}
 

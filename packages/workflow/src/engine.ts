@@ -14,7 +14,13 @@ import {
   type StepStatus,
   type WorkflowStepKey,
 } from '@trimeros/domain';
-import type { FortnoxReadPort } from '@trimeros/fortnox';
+import {
+  isPortResolver,
+  staticResolver,
+  type FortnoxDataSource,
+  type FortnoxPortResolver,
+  type FortnoxReadPort,
+} from '@trimeros/fortnox';
 import { RULE_SET_VERSION, type ProposalRule } from '@trimeros/rules';
 import { createAuditWriter } from './audit.js';
 import type { RunState, StepContext } from './run-context.js';
@@ -22,6 +28,7 @@ import { makeNotImplementedStep, stepCompletenessCheck, stepGeneralLedgerReview 
 import { stepConsolidateFindings } from './steps/consolidate.js';
 import { stepAgentReadiness } from './steps/readiness.js';
 import { stepAccountantReport, stepFinalControl, stepHumanReview } from './steps/report.js';
+import { submitApprovedProposals, type SubmissionResult } from './submit.js';
 import type { CloseRunSummary, StartCloseRunInput, StepOutcome, WorkflowEngine } from './types.js';
 
 type StepHandler = (ctx: StepContext) => Promise<StepOutcome>;
@@ -52,9 +59,15 @@ const HANDLERS: Readonly<Record<WorkflowStepKey, StepHandler>> = {
 
 export interface EngineDependencies {
   readonly repos: Repositories;
-  readonly fortnox: FortnoxReadPort;
+  /**
+   * Either one port for every client (tests, the demo) or a resolver that
+   * picks the client's data source per run (the API runtime).
+   */
+  readonly fortnox: FortnoxReadPort | FortnoxPortResolver;
   readonly model: ModelProvider;
   readonly shadowMode: boolean;
+  /** FORTNOX_WRITES_ENABLED. Defaults to false; the config layer validates it. */
+  readonly fortnoxWritesEnabled?: boolean;
 }
 
 /**
@@ -67,9 +80,11 @@ export interface EngineDependencies {
  */
 export class DatabaseWorkflowEngine implements WorkflowEngine {
   readonly #deps: EngineDependencies;
+  readonly #resolver: FortnoxPortResolver;
 
   constructor(deps: EngineDependencies) {
     this.#deps = deps;
+    this.#resolver = isPortResolver(deps.fortnox) ? deps.fortnox : staticResolver(deps.fortnox);
   }
 
   async startCloseRun(input: StartCloseRunInput): Promise<{ closeRunId: string }> {
@@ -137,13 +152,15 @@ export class DatabaseWorkflowEngine implements WorkflowEngine {
   }
 
   async executeCloseRun(tenantId: string, closeRunId: string): Promise<CloseRunSummary> {
-    const { repos, fortnox, model, shadowMode } = this.#deps;
+    const { repos, model, shadowMode } = this.#deps;
     const scope = { tenantId };
 
     const run = await repos.getCloseRun(scope, closeRunId);
     if (!run) throw new Error(`Unknown close run ${closeRunId}`);
 
     const clientScope = { tenantId, clientId: run.clientId };
+    const dataSource: FortnoxDataSource = await this.#resolver.resolve(clientScope);
+    const fortnox = dataSource.port;
     const client = await repos.getClient(clientScope);
     const policy = await repos.getPolicy(clientScope);
     if (!client) throw new Error(`Unknown client ${run.clientId}`);
@@ -170,14 +187,21 @@ export class DatabaseWorkflowEngine implements WorkflowEngine {
       policy,
       proposalRules,
       fortnox,
+      dataSource,
       model,
       repos,
       audit,
       state,
       shadowMode,
+      fortnoxWritesEnabled: this.#deps.fortnoxWritesEnabled ?? false,
     };
 
-    await repos.updateCloseRun(scope, closeRunId, { status: 'running', startedAt: new Date() });
+    await repos.updateCloseRun(scope, closeRunId, {
+      status: 'running',
+      startedAt: new Date(),
+      dataSource: dataSource.kind,
+      dataSourceLabel: dataSource.label,
+    });
 
     // Steps are declared in dependency order, so a single ordered pass is
     // enough. `isRunnable` still guards it, so a future reordering cannot
@@ -241,6 +265,34 @@ export class DatabaseWorkflowEngine implements WorkflowEngine {
     });
 
     return { ...summary, status: summary.status };
+  }
+
+  /**
+   * Books every approved proposal in the run that passes the write gate.
+   *
+   * Safe to call at any time: in shadow mode, or with the feature flag off,
+   * or for a client whose writes are off, every proposal is reported as
+   * blocked with its reasons and nothing leaves the process.
+   */
+  async submitApprovedProposals(
+    tenantId: string,
+    closeRunId: string,
+    proposalIds?: readonly string[],
+  ): Promise<SubmissionResult> {
+    const { repos, shadowMode } = this.#deps;
+    const run = await repos.getCloseRun({ tenantId }, closeRunId);
+    if (!run) throw new Error(`Unknown close run ${closeRunId}`);
+    const dataSource = await this.#resolver.resolve({ tenantId, clientId: run.clientId });
+    return submitApprovedProposals(repos, {
+      tenantId,
+      clientId: run.clientId,
+      closeRunId,
+      correlationId: run.correlationId,
+      dataSource,
+      shadowMode,
+      featureFlagEnabled: this.#deps.fortnoxWritesEnabled ?? false,
+      ...(proposalIds ? { proposalIds } : {}),
+    });
   }
 
   async getSummary(tenantId: string, closeRunId: string): Promise<CloseRunSummary> {

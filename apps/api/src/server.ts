@@ -18,7 +18,7 @@ await app.listen({ host: runtime.config.apiHost, port: runtime.config.apiPort })
 app.log.info(
   {
     shadowMode: runtime.config.shadowMode,
-    fortnoxAdapter: runtime.fortnox.adapterName,
+    fortnoxAdapter: runtime.config.fortnoxAdapter,
     fortnoxWritesEnabled: runtime.config.fortnoxWritesEnabled,
     modelProvider: runtime.model.name,
     dbDriver: runtime.db.driver,

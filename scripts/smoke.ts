@@ -219,6 +219,55 @@ try {
     `/api/close-runs/${summary.closeRunId}/customer-requests`,
   );
   check('no customer communication was sent', requests.every((r) => r.sentAt === null));
+
+  console.log('\n9. Firm operations');
+  const created = await post<{ client: { id: string; organisationNumber: string } }>('/api/clients', {
+    name: 'Smoke Test AB',
+    organisationNumber: '5590000001',
+    userId: 'user-anna-consultant',
+  });
+  check('a client can be added', created.client.id.length > 0);
+  check('the organisation number is normalised', created.client.organisationNumber === '559000-0001');
+
+  const policy = await fetch(`${BASE}/api/clients/${CLIENT}/policy`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json', 'x-tenant-id': TENANT },
+    body: JSON.stringify({ autoBookEnabled: true, userId: 'user-anna-consultant' }),
+  }).then((r) => r.json() as Promise<{ policy: { autoBookEnabled: boolean } }>);
+  check('policy-driven approval can be switched on per client', policy.policy.autoBookEnabled === true);
+
+  const runAll = await post<{ results: { clientId: string; closeRunId: string | null; error: string | null }[] }>(
+    '/api/close-runs/run-all',
+    { periodKey: PERIOD },
+  );
+  check('a period runs for every client', runAll.results.length === 2);
+  const demoRun = runAll.results.find((r) => r.clientId === CLIENT);
+  check('the demo client ran again', demoRun?.closeRunId !== null && demoRun?.error === null);
+
+  const overview = await get<{
+    automationRate: number;
+    proposals: { approved: number; submitted: number };
+    liveBooking: boolean;
+  }>('/api/firm/overview');
+  check('the firm overview reports an automation rate', overview.automationRate > 0 && overview.automationRate <= 1);
+  check('the system approved automatic-level proposals itself', overview.proposals.approved > 0);
+  check('nothing was booked', overview.proposals.submitted === 0 && overview.liveBooking === false);
+
+  const submission = await post<{ submitted: unknown[]; blocked: { reasons: string[] }[]; liveBooking: boolean }>(
+    `/api/close-runs/${demoRun?.closeRunId}/submit`,
+    {},
+  );
+  check('submitting in shadow mode sends nothing', submission.submitted.length === 0 && submission.liveBooking === false);
+  check(
+    'every approved proposal is reported as blocked by shadow mode',
+    submission.blocked.length > 0 && submission.blocked.every((b) => b.reasons.includes('shadow_mode_active')),
+  );
+
+  const laterAudit = await get<{ fortnoxId: string | null; operation: string }[]>(
+    `/api/close-runs/${demoRun?.closeRunId}/audit`,
+  );
+  check('the blocked writes are in the audit log', laterAudit.some((e) => e.operation === 'fortnox.write_blocked'));
+  check('still no audit event carries a Fortnox id', laterAudit.every((e) => e.fortnoxId === null));
 } finally {
   server?.kill('SIGTERM');
 }
@@ -228,5 +277,5 @@ if (failures.length > 0) {
   console.error(`\nSmoke test FAILED:\n${failures.map((f) => `  - ${f}`).join('\n')}`);
   process.exit(1);
 }
-console.log('Smoke test PASSED — the main flow works and shadow mode held.');
+console.log('Smoke test PASSED — the main flow works, the firm operations work, and shadow mode held.');
 process.exit(0);

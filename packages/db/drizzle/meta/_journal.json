@@ -15,6 +15,13 @@
       "when": 1788807444537,
       "tag": "0001_supreme_redwing",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788987341377,
+      "tag": "0002_aromatic_golden_guardian",
+      "breakpoints": true
     }
   ]
 }

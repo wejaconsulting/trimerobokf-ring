@@ -86,6 +86,11 @@ export const clientAccountingPolicies = pgTable(
     historyWindowMonths: integer('history_window_months').notNull().default(12),
     amountDeviationThreshold: real('amount_deviation_threshold').notNull().default(0.5),
     vatRates: jsonb('vat_rates').$type<number[]>().notNull(),
+    /**
+     * May the system approve `automatic`-level proposals itself? Off by default.
+     * Turning it on is an audited action; booking still needs the write gate.
+     */
+    autoBookEnabled: boolean('auto_book_enabled').notNull().default(false),
     createdAt: createdAt(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -133,6 +138,9 @@ export const closeRuns = pgTable(
     periodKey: text('period_key').notNull(),
     status: text('status').notNull(),
     shadowMode: boolean('shadow_mode').notNull().default(true),
+    /** mock | real | none - which data source the run read from. */
+    dataSource: text('data_source').notNull().default('mock'),
+    dataSourceLabel: text('data_source_label'),
     ruleSetVersion: text('rule_set_version').notNull(),
     decisionModelVersion: text('decision_model_version').notNull(),
     correlationId: text('correlation_id').notNull(),
@@ -282,6 +290,12 @@ export const bookingProposals = pgTable(
     simulatedFortnoxPayload: jsonb('simulated_fortnox_payload').notNull(),
     simulatedFortnoxEndpoint: text('simulated_fortnox_endpoint').notNull(),
     simulatedPayloadHash: text('simulated_payload_hash').notNull(),
+    /** Set only by a real, gated write. Null in shadow mode, always. */
+    fortnoxVoucherId: text('fortnox_voucher_id'),
+    fortnoxReference: text('fortnox_reference'),
+    approvalDecisionId: text('approval_decision_id'),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }),
+    submissionError: text('submission_error'),
     createdAt: createdAt(),
   },
   (t) => [index('proposals_run_idx').on(t.tenantId, t.closeRunId)],
@@ -383,8 +397,12 @@ export const approvalDecisions = pgTable(
     proposalId: text('proposal_id'),
     kind: text('kind').notNull(),
     decidedByUserId: text('decided_by_user_id').notNull(),
+    /** user | system - a policy-driven approval names the system as actor. */
+    actorKind: text('actor_kind').notNull().default('user'),
     comment: text('comment'),
     editedPayload: jsonb('edited_payload'),
+    /** Hash of the exact payload this decision approves. Binds approval to bytes. */
+    approvedPayloadHash: text('approved_payload_hash'),
     shadowOnly: boolean('shadow_only').notNull().default(true),
     createdAt: createdAt(),
   },

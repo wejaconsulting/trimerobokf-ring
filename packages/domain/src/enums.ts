@@ -67,7 +67,11 @@ export const proposalStatusSchema = z.enum([
   'approved_shadow',
   'rejected',
   'simulated',
+  'submitting',
   'submitted',
+  'submission_failed',
+  /** The same correction was already booked by an earlier run. */
+  'already_booked',
 ]);
 export type ProposalStatus = z.infer<typeof proposalStatusSchema>;
 

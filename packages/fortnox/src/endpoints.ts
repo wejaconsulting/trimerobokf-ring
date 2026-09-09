@@ -1,29 +1,57 @@
 /**
  * Fortnox endpoints.
  *
- * Only paths corroborated by official Fortnox documentation appear here. A
- * capability with no verified endpoint is absent from this map by design: the
- * readiness step then reports it as unavailable rather than the system quietly
- * guessing a URL. See docs/fortnox-capability-matrix.md for the evidence
- * behind every entry.
+ * Only paths corroborated by official Fortnox documentation or by the
+ * published Fortnox OpenAPI specification (as shipped in generated client
+ * libraries) appear here. A capability with no corroborated endpoint is absent
+ * from this map by design: the readiness step then reports it as unavailable
+ * rather than the system quietly guessing a URL. See
+ * docs/fortnox-capability-matrix.md for the evidence behind every entry.
  */
 export const FORTNOX_API_VERSION = '3';
 
 export const FORTNOX_ENDPOINTS = {
+  companyInformation: '/3/companyinformation',
   financialYears: '/3/financialyears',
   financialYearByDate: '/3/financialyears?date={date}',
   accounts: '/3/accounts',
   accountByNumber: '/3/accounts/{accountNumber}?financialyear={financialYearId}',
   voucherSeries: '/3/voucherseries',
   vouchers: '/3/vouchers',
+  voucherByNumber: '/3/vouchers/{series}/{number}?financialyear={financialYearId}',
+  voucherFileConnections: '/3/voucherfileconnections',
+  suppliers: '/3/suppliers',
+  customers: '/3/customers',
   supplierInvoices: '/3/supplierinvoices',
+  supplierInvoiceFileConnections: '/3/supplierinvoicefileconnections',
   supplierInvoicePayments: '/3/supplierinvoicepayments',
   invoices: '/3/invoices',
+  invoicePayments: '/3/invoicepayments',
   costCenters: '/3/costcenters',
+  projects: '/3/projects',
+  lockedPeriod: '/3/settings/lockedperiod',
   sie: '/3/sie/{type}',
 } as const;
 
 export type FortnoxEndpointKey = keyof typeof FORTNOX_ENDPOINTS;
+
+/** Wrapper keys Fortnox uses around list responses. */
+export const FORTNOX_LIST_KEYS = {
+  financialYears: 'FinancialYears',
+  accounts: 'Accounts',
+  voucherSeries: 'VoucherSeriesCollection',
+  vouchers: 'Vouchers',
+  voucherFileConnections: 'VoucherFileConnections',
+  suppliers: 'Suppliers',
+  customers: 'Customers',
+  supplierInvoices: 'SupplierInvoices',
+  supplierInvoiceFileConnections: 'SupplierInvoiceFileConnections',
+  supplierInvoicePayments: 'SupplierInvoicePayments',
+  invoices: 'Invoices',
+  invoicePayments: 'InvoicePayments',
+  costCenters: 'CostCenters',
+  projects: 'Projects',
+} as const;
 
 /**
  * Capabilities the workflow needs for which no public endpoint has been

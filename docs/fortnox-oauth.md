@@ -104,6 +104,18 @@ button. That is deliberate: "not set up yet" and "broken" should not look alike.
 If it says **Ansluten** with the right company name, it is done. He never sees a
 token, a client secret, or an environment variable.
 
+What the connection is *used* for depends on the server's `FORTNOX_ADAPTER`:
+
+| `FORTNOX_ADAPTER` | Connected client | Client without a grant |
+| --- | --- | --- |
+| `mock` (default) | demo data | demo data |
+| `auto` | **read-only from Fortnox** | demo data (if it has the demo row), else blocked |
+| `real` | **read-only from Fortnox** | blocked with a Swedish reason in the readiness step |
+
+The settings page states which of these is in effect, so "connected" is never
+confused with "in use". A run records its data source on the close run and shows
+it in the period view.
+
 ---
 
 ## How it works
@@ -194,5 +206,14 @@ A refused verification does **not** silently pass: the page shows *Ansluten
 1. Re-verify every **Unverified** row above against the live documentation.
 2. Confirm `costcenter` is a real scope; drop it if not.
 3. Confirm the `/3/companyinformation` path and response shape.
-4. Keep `SHADOW_MODE=true`. Connecting is read-only; writing needs the feature
-   flag, a recorded approval and a policy check — see `docs/shadow-mode.md`.
+4. Keep `SHADOW_MODE=true` for the first full period. Connecting is read-only;
+   writing is a separate ladder of switches — see `docs/shadow-mode.md` and, in
+   Swedish, `docs/autonomi.md`.
+
+## The per-client write switch
+
+The same page hosts *Skrivbrytare för klienten*: condition 3 of the seven in the
+write gate. It is refused (HTTP 409) while the server runs in shadow mode, it is
+audited as `integration.writes_toggled`, and turning it on does nothing on its
+own - the server-side flag, the acknowledgement phrase and an approval bound to
+the exact payload are all still required for a single voucher to be created.

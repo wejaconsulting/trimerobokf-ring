@@ -59,6 +59,11 @@ const STATUS_LABEL: Record<string, string> = {
   superseded: 'Ersatt',
   // proposals
   simulated: 'Simulerad',
+  approved_shadow: 'Godkänd — ej bokförd',
+  submitting: 'Bokförs',
+  submitted: 'Bokförd i Fortnox',
+  submission_failed: 'Bokföring misslyckades',
+  already_booked: 'Redan bokförd',
 };
 
 const STATUS_TONE: Record<string, Tone> = {
@@ -78,6 +83,11 @@ const STATUS_TONE: Record<string, Tone> = {
   resolved: 'clear',
   superseded: 'neutral',
   simulated: 'automatic',
+  approved_shadow: 'clear',
+  submitting: 'automatic',
+  submitted: 'clear',
+  submission_failed: 'manual',
+  already_booked: 'neutral',
 };
 
 export function decisionTone(level: string): Tone {

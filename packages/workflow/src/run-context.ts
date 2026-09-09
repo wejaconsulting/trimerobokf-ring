@@ -1,7 +1,7 @@
 import type { ModelProvider } from '@trimeros/agent';
 import type { ClientRow, PolicyRow, Repositories } from '@trimeros/db';
 import type { FindingDraft, LedgerSnapshot, PeriodKey, Voucher } from '@trimeros/domain';
-import type { FortnoxCapabilityReport, FortnoxReadPort } from '@trimeros/fortnox';
+import type { FortnoxCapabilityReport, FortnoxDataSource, FortnoxReadPort } from '@trimeros/fortnox';
 import type { ProposalDraft, ProposalRule, RuleContext } from '@trimeros/rules';
 import type { AuditWriter } from './audit.js';
 
@@ -40,10 +40,15 @@ export interface StepContext {
   readonly client: ClientRow;
   readonly policy: PolicyRow;
   readonly proposalRules: readonly ProposalRule[];
+  /** The resolved port for this client. Same object as `dataSource.port`. */
   readonly fortnox: FortnoxReadPort;
+  /** Where this run reads from: a real account, demo data, or nothing. */
+  readonly dataSource: FortnoxDataSource;
   readonly model: ModelProvider;
   readonly repos: Repositories;
   readonly audit: AuditWriter;
   readonly state: RunState;
   readonly shadowMode: boolean;
+  /** The FORTNOX_WRITES_ENABLED feature flag. False unless the operator opted in. */
+  readonly fortnoxWritesEnabled: boolean;
 }

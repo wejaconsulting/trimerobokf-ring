@@ -1,7 +1,12 @@
-import { FORTNOX_READ_SCOPES, FortnoxConnectionError, FortnoxOAuthError } from '@trimeros/fortnox';
+import {
+  FORTNOX_CONNECTION_KIND,
+  FORTNOX_READ_SCOPES,
+  FortnoxConnectionError,
+  FortnoxOAuthError,
+} from '@trimeros/fortnox';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { FORTNOX_CALLBACK_PATH, createFortnoxIntegration } from '../integrations/fortnox.js';
+import { FORTNOX_CALLBACK_PATH } from '../integrations/fortnox.js';
 import type { Runtime } from '../runtime.js';
 
 /**
@@ -35,7 +40,7 @@ export async function registerIntegrationRoutes(
   runtime: Runtime,
   tenantOf: (headers: Record<string, unknown>) => string,
 ): Promise<void> {
-  const integration = createFortnoxIntegration(runtime);
+  const integration = runtime.fortnoxIntegration;
 
   /** What the settings page needs to render, whether or not setup is finished. */
   app.get('/api/integrations/fortnox/status', async (request) => {
@@ -176,6 +181,51 @@ export async function registerIntegrationRoutes(
       clientId: body.clientId,
     });
     return { connection };
+  });
+
+  /**
+   * The per-client write switch (condition 3 of the write gate).
+   *
+   * An audited administrative action. Turning it on does nothing by itself:
+   * SHADOW_MODE=false, FORTNOX_WRITES_ENABLED=true and the acknowledgement
+   * phrase are all still required on the server, and every voucher is still
+   * bound to an approval of its exact payload.
+   */
+  app.post('/api/integrations/fortnox/writes', async (request, reply) => {
+    const body = clientBodySchema.extend({ enabled: z.boolean() }).parse(request.body);
+    const tenantId = tenantOf(request.headers);
+    const scope = { tenantId, clientId: body.clientId };
+
+    const connection = await runtime.repos.getIntegrationConnection(scope, FORTNOX_CONNECTION_KIND);
+    if (!connection) {
+      return reply.code(409).send({ error: 'not_connected' });
+    }
+    if (body.enabled && runtime.config.shadowMode) {
+      return reply.code(409).send({
+        error: 'shadow_mode_active',
+        message: 'Skrivning kan inte aktiveras per klient medan servern kör i shadow mode.',
+      });
+    }
+
+    await runtime.repos.updateIntegrationConnection(scope, FORTNOX_CONNECTION_KIND, {
+      writesEnabled: body.enabled,
+      mode: body.enabled ? 'real_read_write' : 'real_read_only',
+    });
+    await runtime.repos.appendAuditEvent({
+      tenantId,
+      clientId: body.clientId,
+      actorKind: 'user',
+      actorId: body.userId,
+      operation: 'integration.writes_toggled',
+      inputRefs: [`writes_enabled:${body.enabled}`, `shadow_mode:${runtime.config.shadowMode}`],
+      result: 'ok',
+      correlationId: `fortnox-writes-${body.clientId}`,
+    });
+
+    if (!integration.configured) {
+      return { writesEnabled: body.enabled, connection: null };
+    }
+    return { writesEnabled: body.enabled, connection: await integration.service.getStatus(scope) };
   });
 
   app.post('/api/integrations/fortnox/disconnect', async (request, reply) => {

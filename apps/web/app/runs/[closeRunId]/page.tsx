@@ -1,8 +1,15 @@
 import Link from 'next/link';
 import { api } from '../../../lib/api';
+import { submitProposals } from '../../actions';
 import { Crumbs, Panel, StatusBadge, Tile, statusLabel } from '../../ui';
 
 export const dynamic = 'force-dynamic';
+
+const SOURCE_LABEL: Record<string, string> = {
+  mock: 'Demodata (mock-adapter)',
+  real: 'Fortnox',
+  none: 'Ingen datakälla',
+};
 
 /**
  * Period view: the 14 workflow steps as a spine.
@@ -12,19 +19,31 @@ export const dynamic = 'force-dynamic';
  * steps are shown rather than hidden: the point of the state machine is that a
  * consultant can see what the system did *not* do.
  */
-export default async function PeriodPage({ params }: { params: Promise<{ closeRunId: string }> }) {
+export default async function PeriodPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ closeRunId: string }>;
+  searchParams: Promise<{ submitted?: string; blocked?: string; failed?: string; live?: string }>;
+}) {
   const { closeRunId } = await params;
+  const query = await searchParams;
   const detail = await api.closeRun(closeRunId);
-  const { run, client, summary, steps } = detail;
+  const { run, client, summary, steps, proposalCounts } = detail;
 
   const notImplementedBlocking = steps.filter((s) => !s.implemented && s.blocksCompletion).length;
+  const approved = proposalCounts.approved_shadow ?? 0;
+  const submitted = proposalCounts.submitted ?? 0;
+  const alreadyBooked = proposalCounts.already_booked ?? 0;
+  const failed = proposalCounts.submission_failed ?? 0;
+  const proposalTotal = Object.values(proposalCounts).reduce((a, b) => a + b, 0);
 
   return (
     <>
       <Crumbs
         items={[
-          { label: 'Kundöversikt', href: '/' },
-          { label: client?.name ?? run.clientId },
+          { label: 'Byråöversikt', href: '/' },
+          { label: client?.name ?? run.clientId, href: `/klienter/${encodeURIComponent(run.clientId)}` },
           { label: run.periodKey },
         ]}
       />
@@ -47,6 +66,27 @@ export default async function PeriodPage({ params }: { params: Promise<{ closeRu
           </Link>
         </div>
       </div>
+
+      {query.submitted !== undefined ? (
+        <div
+          className="note"
+          data-tone={Number(query.submitted) > 0 ? 'clear' : Number(query.failed ?? 0) > 0 ? 'manual' : 'review'}
+          style={{ marginBottom: 16 }}
+          role="status"
+        >
+          {query.live === '1' ? (
+            <>
+              <strong>{query.submitted} förslag bokförda i Fortnox.</strong> {query.blocked} stoppade av skrivgrinden
+              {Number(query.failed ?? 0) > 0 ? `, ${query.failed} misslyckade` : ''}. Varje förslag prövades individuellt.
+            </>
+          ) : (
+            <>
+              <strong>Ingenting skickades.</strong> {query.blocked} godkända förslag stoppades av skrivgrinden — shadow mode
+              eller skrivflaggan är av. Orsakerna per förslag finns i auditloggen.
+            </>
+          )}
+        </div>
+      ) : null}
 
       <div className="split">
         <Panel title="Processteg" padded={false}>
@@ -88,6 +128,40 @@ export default async function PeriodPage({ params }: { params: Promise<{ closeRu
             </div>
           </Panel>
 
+          <Panel title={`Bokföringsförslag (${proposalTotal})`}>
+            <dl className="dl">
+              <dt>Godkända, ej bokförda</dt>
+              <dd>{approved}</dd>
+              <dt>Bokförda i Fortnox</dt>
+              <dd>{submitted}</dd>
+              {alreadyBooked > 0 ? (
+                <>
+                  <dt>Redan bokförda tidigare</dt>
+                  <dd>{alreadyBooked}</dd>
+                </>
+              ) : null}
+              {failed > 0 ? (
+                <>
+                  <dt>Misslyckade</dt>
+                  <dd>{failed}</dd>
+                </>
+              ) : null}
+            </dl>
+            {approved > 0 ? (
+              <form action={submitProposals} style={{ marginTop: 12 }}>
+                <input type="hidden" name="closeRunId" value={run.id} />
+                <button className="btn btn-primary" type="submit">
+                  Bokför godkända förslag
+                </button>
+                <p className="muted" style={{ fontSize: 12.5, marginBottom: 0, marginTop: 8 }}>
+                  {run.shadowMode
+                    ? 'Körningen gjordes i shadow mode: knappen prövar grinden och rapporterar varför varje förslag stoppas. Inget skickas.'
+                    : 'Varje förslag prövas mot skrivgrindens sju villkor. Bara exakt den payload som godkändes kan bokföras.'}
+                </p>
+              </form>
+            ) : null}
+          </Panel>
+
           <Panel title={summary.canComplete ? 'Slutkontroll' : `Hinder (${summary.reasons.length})`}>
             {summary.canComplete ? (
               <div className="note" data-tone="clear">
@@ -115,6 +189,14 @@ export default async function PeriodPage({ params }: { params: Promise<{ closeRu
 
           <Panel title="Körning">
             <dl className="dl">
+              <dt>Datakälla</dt>
+              <dd>
+                {run.dataSource === 'real' ? (
+                  <strong>Fortnox · {run.dataSourceLabel ?? ''}</strong>
+                ) : (
+                  (SOURCE_LABEL[run.dataSource] ?? run.dataSource)
+                )}
+              </dd>
               <dt>Close run</dt>
               <dd className="mono" style={{ fontSize: 11.5 }}>
                 {run.id}
@@ -124,7 +206,7 @@ export default async function PeriodPage({ params }: { params: Promise<{ closeRu
                 {run.correlationId}
               </dd>
               <dt>Shadow mode</dt>
-              <dd>{run.shadowMode ? 'Ja — inget skickas till Fortnox' : 'Nej'}</dd>
+              <dd>{run.shadowMode ? 'Ja — inget skickas till Fortnox' : 'Nej — skrivgrinden avgör per förslag'}</dd>
               <dt>Status</dt>
               <dd>{statusLabel(summary.status)}</dd>
             </dl>

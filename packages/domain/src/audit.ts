@@ -27,6 +27,12 @@ export const auditOperationSchema = z.enum([
   'fortnox.read',
   'fortnox.write_simulated',
   'fortnox.write_blocked',
+  'fortnox.write_submitted',
+  'fortnox.write_failed',
+  'review.auto_approved',
+  'policy.updated',
+  'client.created',
+  'integration.writes_toggled',
   'integration.readiness_checked',
 ]);
 export type AuditOperation = z.infer<typeof auditOperationSchema>;

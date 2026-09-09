@@ -14,6 +14,7 @@ import type {
   Voucher,
   VoucherSeries,
 } from '@trimeros/domain';
+import type { WriteContext } from './write-policy.js';
 
 /**
  * The Fortnox boundary.
@@ -46,13 +47,20 @@ export interface FortnoxReadPort {
 }
 
 export interface FortnoxWritePort {
-  createVoucher(payload: VoucherCreatePayload): Promise<{ id: string }>;
-  lockPeriod(through: IsoDate): Promise<void>;
+  /**
+   * Creates a voucher. Implementations must evaluate the write gate on the
+   * supplied context before sending anything; without a context they refuse.
+   */
+  createVoucher(
+    payload: VoucherCreatePayload,
+    context?: WriteContext,
+  ): Promise<{ id: string; reference?: string }>;
+  lockPeriod(through: IsoDate, context?: WriteContext): Promise<void>;
 }
 
 export interface FortnoxCapabilityReport {
   readonly adapterName: string;
-  readonly mode: 'mock' | 'real_read_only' | 'real_read_write';
+  readonly mode: 'mock' | 'real_read_only' | 'real_read_write' | 'unavailable';
   readonly writesEnabled: boolean;
   readonly available: readonly string[];
   /** Capabilities the system needs but cannot serve, with the reason. */

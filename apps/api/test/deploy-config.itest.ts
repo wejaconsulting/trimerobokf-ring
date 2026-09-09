@@ -1,13 +1,14 @@
 import { createModelProvider } from '@trimeros/agent';
 import { createRepositories, openEphemeralDatabase, seedDemoData, type DbHandle } from '@trimeros/db';
-import { MockFortnoxAdapter } from '@trimeros/fortnox';
+import { MockFortnoxAdapter, staticResolver } from '@trimeros/fortnox';
 import { buildSyntheticDataset } from '@trimeros/testing';
 import { DatabaseWorkflowEngine } from '@trimeros/workflow';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
+import { createFortnoxIntegration } from '../src/integrations/fortnox.js';
 import { safeEqual } from '../src/auth.js';
-import { appConfigFromEnv } from '../src/config.js';
+import { FORTNOX_WRITES_ACKNOWLEDGEMENT_PHRASE, appConfigFromEnv } from '../src/config.js';
 import type { Runtime } from '../src/runtime.js';
 
 describe('hosting configuration', () => {
@@ -42,7 +43,34 @@ describe('hosting configuration', () => {
     expect(appConfigFromEnv({}).shadowMode).toBe(true);
     expect(appConfigFromEnv({ SHADOW_MODE: 'yes' }).shadowMode).toBe(false);
     expect(appConfigFromEnv({ SHADOW_MODE: 'TRUE' }).shadowMode).toBe(true);
-    expect(() => appConfigFromEnv({ FORTNOX_WRITES_ENABLED: 'true' })).toThrow(/not supported in phase 1/);
+    // Writes: never one flag. Each missing condition is its own refusal.
+    expect(() => appConfigFromEnv({ FORTNOX_WRITES_ENABLED: 'true' })).toThrow(/requires SHADOW_MODE=false/);
+    expect(() => appConfigFromEnv({ FORTNOX_WRITES_ENABLED: 'true', SHADOW_MODE: 'false' })).toThrow(
+      /FORTNOX_WRITES_ACKNOWLEDGEMENT/,
+    );
+    expect(() =>
+      appConfigFromEnv({
+        FORTNOX_WRITES_ENABLED: 'true',
+        SHADOW_MODE: 'false',
+        FORTNOX_WRITES_ACKNOWLEDGEMENT: FORTNOX_WRITES_ACKNOWLEDGEMENT_PHRASE,
+      }),
+    ).toThrow(/meaningless with FORTNOX_ADAPTER=mock/);
+    const live = appConfigFromEnv({
+      FORTNOX_WRITES_ENABLED: 'true',
+      SHADOW_MODE: 'false',
+      FORTNOX_WRITES_ACKNOWLEDGEMENT: FORTNOX_WRITES_ACKNOWLEDGEMENT_PHRASE,
+      FORTNOX_ADAPTER: 'auto',
+    });
+    expect(live.fortnoxWritesEnabled).toBe(true);
+    expect(live.shadowMode).toBe(false);
+  });
+
+  it('allows real read-only data sources without touching the write switches', () => {
+    const config = appConfigFromEnv({ FORTNOX_ADAPTER: 'auto' });
+    expect(config.fortnoxAdapter).toBe('auto');
+    expect(config.shadowMode).toBe(true);
+    expect(config.fortnoxWritesEnabled).toBe(false);
+    expect(appConfigFromEnv({ FORTNOX_ADAPTER: 'real' }).fortnoxAdapter).toBe('real');
   });
 
   it('compares credentials without leaking length', () => {
@@ -67,6 +95,8 @@ describe('password gate', () => {
       db: handle,
       repos,
       fortnox,
+      fortnoxResolver: staticResolver(fortnox),
+      fortnoxIntegration: createFortnoxIntegration(appConfigFromEnv({}), repos),
       model,
       engine: new DatabaseWorkflowEngine({ repos, fortnox, model, shadowMode: true }),
       close: async () => {},

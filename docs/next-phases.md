@@ -23,16 +23,16 @@ a developer account to open the page and confirm it. Specifically:
       underlag, skattekonto). These may exist under a partner agreement or on the experimental
       API. Their absence is the single biggest constraint on the product.
 
-### 2.2 Implement the real adapter's read path
+### 2.2 Implement the real adapter's read path — **done**
 
-- OAuth2 with the token in a secret manager, refreshed on a schedule (access token 1 h,
-  refresh token 45 days, and a used refresh token is invalidated — so refresh must be
-  serialised per connection or a race will lock the integration out).
-- Respect the rate limit: 25 requests / 5 s per token. A token-bucket limiter with
-  backpressure, not retry-on-429.
-- Response mapping into the existing `LedgerSnapshot` shapes, validated with zod at the
-  boundary — parse, don't assume.
-- Contract tests against recorded fixtures from a **sandbox** account.
+- OAuth2 with sealed tokens and serialised refresh: `packages/fortnox/src/oauth/`.
+- Rate limit 25 / 5 s as a sliding window with back-off on 429: `packages/fortnox/src/http/`.
+- Response mapping into `LedgerSnapshot` shapes, validated with zod at the boundary:
+  `packages/fortnox/src/wire.ts`.
+- Contract tests against a Fortnox-shaped fake (`packages/testing/src/fake-fortnox.ts`) and a
+  full close run through it (`packages/workflow/test/autonomy.itest.ts`).
+- [ ] Still to do: run it against a **sandbox** account and compare with the fake. The wire
+      shapes come from the published OpenAPI specification, not from a live call.
 
 ### 2.3 Close the security gaps
 
@@ -71,19 +71,21 @@ is the bank-data source, or the system needs its own bank connection.
 
 ---
 
-## Phase 4 — Lift shadow mode, carefully
+## Phase 4 — Lift shadow mode, carefully — **built, not switched on**
 
-Follow the ordered list in [`shadow-mode.md`](./shadow-mode.md). The shape:
+The write path exists end to end: approvals bound to payload hashes, policy-driven system
+approvals, the seven-condition gate, `POST /3/vouchers`, the per-client switch, the
+once-only guard. [`shadow-mode.md`](./shadow-mode.md) lists the switches in order.
 
-1. Wire `approvalDecisionId` + `approvedPayloadHash` from the review UI into the write gate.
-2. Enable writes for **one** proposal type (the dimension reclassification — smallest blast
-   radius, fully deterministic) for **one** pilot client, behind a per-client flag and a kill
-   switch.
-3. Read back and reconcile every write against Fortnox; alert on any divergence.
-4. Expand one proposal type at a time, never one client at a time.
+What remains is operational, not code:
 
-Do not start until a full period has run in shadow mode against a real account and a
-consultant has reviewed the proposals and agreed with them.
+1. Run a full period in shadow mode against a real account and have a consultant read the
+   automatically approved proposals.
+2. Enable the per-client switch for **one** pilot client.
+3. [ ] Read back and reconcile every write against Fortnox (fetch the created voucher and
+       compare rows); alert on divergence. Today the created voucher's reference is stored;
+       the read-back is not automated.
+4. Expand one client at a time.
 
 ---
 

@@ -131,11 +131,20 @@ a prompt bug.
 ## Approval and write authorisation
 
 The three-level decision model (`automatic` / `review` / `manual_assessment`) governs what may
-happen without a human. In phase 1 even `automatic` only means "simulated without asking".
+happen without a human. `automatic` means the proposal passed every hard gate and scored at or
+above the threshold; whether the *system* may approve it is a per-client policy switch
+(`autoBookEnabled`, audited as `policy.updated`), and such an approval is recorded as an
+`ApprovalDecision` with `actorKind: 'system'` and `decidedByUserId: 'system:policy-auto-approver'`.
 
-For any future real write, the gate in `packages/fortnox/src/write-policy.ts` requires seven
-independent conditions, including a recorded human `ApprovalDecision` and a payload hash
-matching what that human approved. See [`shadow-mode.md`](./shadow-mode.md).
+Every decision - human or system - carries `approvedPayloadHash`, the hash of the exact payload
+it approves. The write gate in `packages/fortnox/src/write-policy.ts` requires seven independent
+conditions, including that hash matching the bytes about to be sent. A submission claims the
+proposal with a compare-and-set before posting and records the booked hash afterwards, so the
+same correction is never booked twice. See [`shadow-mode.md`](./shadow-mode.md).
+
+The real adapter's access token is obtained per request from `FortnoxConnectionService`, lives
+in `FortnoxHttpClient` only, and appears in no error, log line, audit row or response.
+`FortnoxApiError` carries the path and Fortnox's own error code.
 
 ---
 
